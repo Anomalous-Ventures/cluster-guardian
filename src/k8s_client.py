@@ -5,7 +5,7 @@ Provides safe, rate-limited access to Kubernetes operations
 for the Cluster Guardian agent.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 from collections import deque
 import structlog
@@ -33,8 +33,20 @@ class ActionRateLimiter:
         self.actions: deque = deque()
         self.redis_client = redis_client
 
+    async def _refresh_max_actions(self):
+        """Refresh max_actions from runtime config store if available."""
+        try:
+            from .config_store import get_config_store
+            store = get_config_store()
+            value = await store.get("max_actions_per_hour")
+            if isinstance(value, int) and value > 0:
+                self.max_actions = value
+        except Exception:
+            pass
+
     async def can_act(self) -> bool:
         """Check if we can perform another action."""
+        await self._refresh_max_actions()
         self._cleanup_old()
         if self.redis_client and self.redis_client.available:
             try:
@@ -48,14 +60,14 @@ class ActionRateLimiter:
 
     async def record_action(self, action: str):
         """Record that an action was taken."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         self.actions.append((now, action))
         if self.redis_client and self.redis_client.available:
             await self.redis_client.record_action(action, now.isoformat())
 
     def _cleanup_old(self):
         """Remove actions outside the window."""
-        cutoff = datetime.utcnow() - timedelta(seconds=self.window_seconds)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.window_seconds)
         while self.actions and self.actions[0][0] < cutoff:
             self.actions.popleft()
 
@@ -83,7 +95,7 @@ class AuditLog:
     ):
         """Log a remediation action."""
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "action": action,
             "target": target,
             "namespace": namespace,
@@ -597,7 +609,7 @@ class K8sClient:
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "cluster-guardian/restartedAt": datetime.utcnow().isoformat()
+                                "cluster-guardian/restartedAt": datetime.now(timezone.utc).isoformat()
                             }
                         }
                     }
@@ -731,7 +743,7 @@ class K8sClient:
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "cluster-guardian/restartedAt": datetime.utcnow().isoformat()
+                                "cluster-guardian/restartedAt": datetime.now(timezone.utc).isoformat()
                             }
                         }
                     }

@@ -10,7 +10,7 @@ Provides:
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
@@ -171,6 +171,24 @@ async def lifespan(app: FastAPI):
     memory = get_memory()
     await memory.connect()
 
+    # Load persisted approvals from Redis
+    try:
+        persisted = await redis.get_pending_approvals()
+        if persisted:
+            app_state.pending_approvals = persisted
+            logger.info("Loaded pending approvals from Redis", count=len(persisted))
+    except Exception as exc:
+        logger.warning("Failed to load pending approvals from Redis", error=str(exc))
+
+    # Load last scan result from Redis
+    try:
+        last_scan = await redis.get_last_scan()
+        if last_scan:
+            app_state.last_scan_result = last_scan
+            logger.info("Loaded last scan result from Redis")
+    except Exception as exc:
+        logger.warning("Failed to load last scan from Redis", error=str(exc))
+
     # Initialize guardian
     app_state.guardian = get_guardian()
     logger.info("Guardian initialized")
@@ -191,12 +209,22 @@ async def periodic_scan_loop():
     """Background task for periodic cluster scans."""
     while True:
         try:
-            await asyncio.sleep(settings.scan_interval_seconds)
+            # Use runtime-configurable scan interval from Redis/config store
+            try:
+                store = get_config_store()
+                interval = await store.get("scan_interval_seconds")
+            except Exception:
+                interval = settings.scan_interval_seconds
+            await asyncio.sleep(interval)
             logger.info("Running periodic scan")
 
             if app_state.guardian:
                 result = await app_state.guardian.run_scan()
                 app_state.last_scan_result = result
+
+                # Persist scan result to Redis
+                redis = get_redis_client()
+                await redis.store_scan_result(result)
 
                 # Notify websocket clients
                 await broadcast_update(
@@ -295,7 +323,7 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         version=__version__,
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         components={
             "guardian": "ready" if app_state.guardian else "not_initialized",
             "k8sgpt": "healthy" if k8sgpt_healthy else "unhealthy",
@@ -339,6 +367,7 @@ async def trigger_scan(background_tasks: BackgroundTasks):
     try:
         result = await app_state.guardian.run_scan()
         app_state.last_scan_result = result
+        await get_redis_client().store_scan_result(result)
         guardian_scans_total.labels(result="success").inc()
         await broadcast_update({"type": "scan_complete", "result": result})
     except Exception:
@@ -352,7 +381,7 @@ async def trigger_scan(background_tasks: BackgroundTasks):
         summary=result.get("summary", ""),
         audit_log=result.get("audit_log", []),
         rate_limit=result.get("rate_limit", {}),
-        timestamp=result.get("timestamp", datetime.utcnow().isoformat()),
+        timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
     )
 
 
@@ -383,7 +412,7 @@ async def investigate_issue(request: InvestigateRequest):
         raise HTTPException(status_code=503, detail="Guardian not initialized")
 
     thread_id = (
-        request.thread_id or f"investigate-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        request.thread_id or f"investigate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     )
 
     result = await app_state.guardian.investigate_issue(
@@ -416,7 +445,7 @@ async def run_health_checks():
     )
 
     return {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "total": len(results),
         "healthy": healthy_count,
         "unhealthy": unhealthy_count,
@@ -717,7 +746,7 @@ async def _check_http(url: str) -> str:
 @connections_router.get("/connections")
 async def get_connections() -> Dict[str, Any]:
     """Return the health status of all external service connections."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     results: List[ConnectionStatus] = []
 
     # Prometheus
@@ -812,7 +841,7 @@ async def test_connection(name: str) -> ConnectionStatus:
     """Test a specific external service connection by name."""
     import httpx
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     checks: Dict[str, Any] = {
         "prometheus": lambda: _check_http(f"{settings.prometheus_url}/-/healthy"),
@@ -889,6 +918,15 @@ approvals_router = APIRouter(prefix="/api/v1", tags=["Approvals"])
 @approvals_router.get("/approvals")
 async def get_approvals() -> Dict[str, Any]:
     """Return all pending approval actions."""
+    # Refresh from Redis if available
+    redis = get_redis_client()
+    if redis.available:
+        try:
+            persisted = await redis.get_pending_approvals()
+            if persisted:
+                app_state.pending_approvals = persisted
+        except Exception:
+            pass
     return {
         "approvals": [
             ApprovalAction(**a)
@@ -909,6 +947,8 @@ async def approve_action(approval_id: str) -> Dict[str, str]:
                     detail=f"Action already {entry['status']}",
                 )
             entry["status"] = "approved"
+            redis = get_redis_client()
+            await redis.update_pending_approval(approval_id, "approved")
             logger.info("approval.approved", id=approval_id, action=entry["action"])
             return {"status": "approved", "id": approval_id}
 
@@ -926,6 +966,8 @@ async def reject_action(approval_id: str) -> Dict[str, str]:
                     detail=f"Action already {entry['status']}",
                 )
             entry["status"] = "rejected"
+            redis = get_redis_client()
+            await redis.update_pending_approval(approval_id, "rejected")
             logger.info("approval.rejected", id=approval_id, action=entry["action"])
             return {"status": "rejected", "id": approval_id}
 
