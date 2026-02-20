@@ -14,7 +14,14 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    BackgroundTasks,
+    WebSocket,
+    WebSocketDisconnect,
+    APIRouter,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import structlog
@@ -48,14 +55,19 @@ logger = structlog.get_logger(__name__)
 # REQUEST/RESPONSE MODELS
 # =============================================================================
 
+
 class InvestigateRequest(BaseModel):
     """Request to investigate a specific issue."""
+
     description: str = Field(..., description="Description of the issue to investigate")
-    thread_id: Optional[str] = Field(None, description="Thread ID for conversation continuity")
+    thread_id: Optional[str] = Field(
+        None, description="Thread ID for conversation continuity"
+    )
 
 
 class ScanResponse(BaseModel):
     """Response from a cluster scan."""
+
     success: bool
     summary: str
     audit_log: List[Dict[str, Any]]
@@ -65,6 +77,7 @@ class ScanResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     version: str
     timestamp: str
@@ -73,6 +86,7 @@ class HealthResponse(BaseModel):
 
 class AlertManagerWebhook(BaseModel):
     """AlertManager webhook payload."""
+
     version: str = "4"
     groupKey: str
     status: str
@@ -86,6 +100,7 @@ class AlertManagerWebhook(BaseModel):
 
 class FalcoWebhook(BaseModel):
     """Falco webhook alert payload."""
+
     uuid: Optional[str] = None
     output: str = ""
     priority: str = ""
@@ -98,11 +113,13 @@ class FalcoWebhook(BaseModel):
 
 class ConfigResetRequest(BaseModel):
     """Request to reset a config key to its default."""
+
     key: str = Field(..., description="Configuration key to reset to default")
 
 
 class ConnectionStatus(BaseModel):
     """Status of an external service connection."""
+
     name: str
     status: str = Field(..., description="connected, disconnected, or error")
     last_checked: str
@@ -110,6 +127,7 @@ class ConnectionStatus(BaseModel):
 
 class ApprovalAction(BaseModel):
     """A pending approval action."""
+
     id: str
     action: str
     description: str
@@ -121,6 +139,7 @@ class ApprovalAction(BaseModel):
 # =============================================================================
 # APPLICATION STATE
 # =============================================================================
+
 
 class AppState:
     """Global application state."""
@@ -139,6 +158,7 @@ app_state = AppState()
 # =============================================================================
 # LIFECYCLE
 # =============================================================================
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -179,10 +199,12 @@ async def periodic_scan_loop():
                 app_state.last_scan_result = result
 
                 # Notify websocket clients
-                await broadcast_update({
-                    "type": "scan_complete",
-                    "result": result,
-                })
+                await broadcast_update(
+                    {
+                        "type": "scan_complete",
+                        "result": result,
+                    }
+                )
 
         except asyncio.CancelledError:
             break
@@ -202,6 +224,7 @@ async def broadcast_update(message: Dict[str, Any]):
 # =============================================================================
 # FASTAPI APP
 # =============================================================================
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -236,9 +259,13 @@ def create_app() -> FastAPI:
 
     # Static file mount for frontend SPA
     import os
-    frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+
+    frontend_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "frontend", "dist"
+    )
     if os.path.isdir(frontend_dir):
         from starlette.staticfiles import StaticFiles
+
         app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 
     return app
@@ -247,8 +274,6 @@ def create_app() -> FastAPI:
 # =============================================================================
 # HEALTH ROUTES
 # =============================================================================
-
-from fastapi import APIRouter
 
 health_router = APIRouter(tags=["Health"])
 
@@ -259,11 +284,13 @@ async def health_check():
     k8sgpt = get_k8sgpt_client()
     k8sgpt_healthy = await k8sgpt.health_check()
 
-    guardian_info.info({
-        "version": __version__,
-        "autonomy_level": settings.autonomy_level,
-        "llm_model": settings.llm_model,
-    })
+    guardian_info.info(
+        {
+            "version": __version__,
+            "autonomy_level": settings.autonomy_level,
+            "llm_model": settings.llm_model,
+        }
+    )
 
     return HealthResponse(
         status="healthy",
@@ -355,7 +382,9 @@ async def investigate_issue(request: InvestigateRequest):
     if not app_state.guardian:
         raise HTTPException(status_code=503, detail="Guardian not initialized")
 
-    thread_id = request.thread_id or f"investigate-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    thread_id = (
+        request.thread_id or f"investigate-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    )
 
     result = await app_state.guardian.investigate_issue(
         description=request.description,
@@ -372,15 +401,19 @@ async def run_health_checks():
     results = await health_checker.check_all()
 
     for r in results:
-        guardian_health_check_status.labels(service=r.service).set(1 if r.healthy else 0)
+        guardian_health_check_status.labels(service=r.service).set(
+            1 if r.healthy else 0
+        )
 
     healthy_count = sum(1 for r in results if r.healthy)
     unhealthy_count = sum(1 for r in results if not r.healthy)
 
-    await broadcast_update({
-        "type": "health_update",
-        "data": {"healthy": healthy_count, "unhealthy": unhealthy_count},
-    })
+    await broadcast_update(
+        {
+            "type": "health_update",
+            "data": {"healthy": healthy_count, "unhealthy": unhealthy_count},
+        }
+    )
 
     return {
         "timestamp": datetime.utcnow().isoformat(),
@@ -422,6 +455,7 @@ async def get_crashloop_pods():
 async def get_status_page():
     """Proxy Gatus endpoint statuses for the dashboard widget."""
     from .gatus_client import get_gatus_client
+
     gatus = get_gatus_client()
     statuses = await gatus.get_endpoint_statuses()
     return {"endpoints": statuses}
@@ -435,7 +469,9 @@ webhook_router = APIRouter(prefix="/webhook", tags=["Webhooks"])
 
 
 @webhook_router.post("/alertmanager")
-async def alertmanager_webhook(payload: AlertManagerWebhook, background_tasks: BackgroundTasks):
+async def alertmanager_webhook(
+    payload: AlertManagerWebhook, background_tasks: BackgroundTasks
+):
     """
     Receive alerts from AlertManager and trigger investigation.
 
@@ -452,7 +488,9 @@ async def alertmanager_webhook(payload: AlertManagerWebhook, background_tasks: B
         group_labels=payload.groupLabels,
     )
 
-    guardian_issues_detected_total.labels(source="alertmanager").inc(len(payload.alerts))
+    guardian_issues_detected_total.labels(source="alertmanager").inc(
+        len(payload.alerts)
+    )
 
     if payload.status != "firing":
         return {"status": "ignored", "reason": "not firing"}
@@ -481,10 +519,16 @@ async def alertmanager_webhook(payload: AlertManagerWebhook, background_tasks: B
         thread_id=f"alert-{payload.groupKey[:20]}",
     )
 
-    await broadcast_update({
-        "type": "alert_received",
-        "data": {"source": "alertmanager", "alerts": len(payload.alerts), "status": payload.status},
-    })
+    await broadcast_update(
+        {
+            "type": "alert_received",
+            "data": {
+                "source": "alertmanager",
+                "alerts": len(payload.alerts),
+                "status": payload.status,
+            },
+        }
+    )
 
     return {
         "status": "accepted",
@@ -535,10 +579,16 @@ async def falco_webhook(payload: FalcoWebhook, background_tasks: BackgroundTasks
         thread_id=f"falco-{parsed['rule'][:30]}",
     )
 
-    await broadcast_update({
-        "type": "security_alert",
-        "data": {"source": "falco", "rule": parsed["rule"], "severity": parsed["severity"]},
-    })
+    await broadcast_update(
+        {
+            "type": "security_alert",
+            "data": {
+                "source": "falco",
+                "rule": parsed["rule"],
+                "severity": parsed["severity"],
+            },
+        }
+    )
 
     return {
         "status": "accepted",
@@ -571,10 +621,12 @@ async def websocket_endpoint(websocket: WebSocket):
             if data.get("type") == "ping":
                 await websocket.send_json({"type": "pong"})
             elif data.get("type") == "get_status":
-                await websocket.send_json({
-                    "type": "status",
-                    "last_scan": app_state.last_scan_result,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "status",
+                        "last_scan": app_state.last_scan_result,
+                    }
+                )
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
@@ -700,7 +752,9 @@ async def get_connections() -> Dict[str, Any]:
 
     # AlertManager
     status = await _check_http(f"{settings.alertmanager_url}/-/healthy")
-    results.append(ConnectionStatus(name="alertmanager", status=status, last_checked=now))
+    results.append(
+        ConnectionStatus(name="alertmanager", status=status, last_checked=now)
+    )
 
     # Longhorn
     status = await _check_http(f"{settings.longhorn_url}/v1")
@@ -709,16 +763,24 @@ async def get_connections() -> Dict[str, Any]:
     # Langfuse (optional)
     if settings.langfuse_host:
         status = await _check_http(f"{settings.langfuse_host}/api/public/health")
-        results.append(ConnectionStatus(name="langfuse", status=status, last_checked=now))
+        results.append(
+            ConnectionStatus(name="langfuse", status=status, last_checked=now)
+        )
     else:
-        results.append(ConnectionStatus(name="langfuse", status="disconnected", last_checked=now))
+        results.append(
+            ConnectionStatus(name="langfuse", status="disconnected", last_checked=now)
+        )
 
     # TheHive (optional)
     if settings.thehive_url and settings.thehive_api_key:
         status = await _check_http(f"{settings.thehive_url}/api/status")
-        results.append(ConnectionStatus(name="thehive", status=status, last_checked=now))
+        results.append(
+            ConnectionStatus(name="thehive", status=status, last_checked=now)
+        )
     else:
-        results.append(ConnectionStatus(name="thehive", status="disconnected", last_checked=now))
+        results.append(
+            ConnectionStatus(name="thehive", status="disconnected", last_checked=now)
+        )
 
     # GitHub (optional)
     if settings.github_token:
@@ -738,7 +800,9 @@ async def get_connections() -> Dict[str, Any]:
             status = "disconnected"
         results.append(ConnectionStatus(name="github", status=status, last_checked=now))
     else:
-        results.append(ConnectionStatus(name="github", status="disconnected", last_checked=now))
+        results.append(
+            ConnectionStatus(name="github", status="disconnected", last_checked=now)
+        )
 
     return {"connections": results}
 
@@ -827,7 +891,8 @@ async def get_approvals() -> Dict[str, Any]:
     """Return all pending approval actions."""
     return {
         "approvals": [
-            ApprovalAction(**a) for a in app_state.pending_approvals
+            ApprovalAction(**a)
+            for a in app_state.pending_approvals
             if a.get("status") == "pending"
         ]
     }

@@ -10,13 +10,12 @@ Goes beyond simple HTTP 200 checks to verify:
 
 import asyncio
 import ssl
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 import httpx
 import structlog
 
-from .config import settings
 
 logger = structlog.get_logger(__name__)
 
@@ -24,6 +23,7 @@ logger = structlog.get_logger(__name__)
 @dataclass
 class HealthCheckResult:
     """Result of a deep health check."""
+
     service: str
     healthy: bool
     checks: List[Dict[str, Any]] = field(default_factory=list)
@@ -85,7 +85,9 @@ class DeepHealthChecker:
     async def check_all(self) -> List[HealthCheckResult]:
         """Run health checks on all registered services."""
         results = []
-        tasks = [self._run_check(name, check) for name, check in self.service_checks.items()]
+        tasks = [
+            self._run_check(name, check) for name, check in self.service_checks.items()
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Filter out exceptions and convert to results
@@ -133,20 +135,20 @@ class DeepHealthChecker:
             )
 
             # Get peer certificate
-            ssl_object = writer.get_extra_info('ssl_object')
+            ssl_object = writer.get_extra_info("ssl_object")
             cert = ssl_object.getpeercert()
 
             writer.close()
             await writer.wait_closed()
 
             # Parse expiration
-            not_after = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
             days_until_expiry = (not_after - datetime.utcnow()).days
 
             return {
                 "valid": True,
-                "issuer": dict(x[0] for x in cert.get('issuer', [])),
-                "subject": dict(x[0] for x in cert.get('subject', [])),
+                "issuer": dict(x[0] for x in cert.get("issuer", [])),
+                "subject": dict(x[0] for x in cert.get("subject", [])),
                 "expires": not_after.isoformat(),
                 "days_until_expiry": days_until_expiry,
                 "warning": days_until_expiry < 30,
@@ -204,9 +206,13 @@ class DeepHealthChecker:
             result.errors.append(f"SSL certificate invalid: {ssl_check.get('error')}")
             result.healthy = False
         elif ssl_check.get("critical"):
-            result.errors.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.errors.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
         elif ssl_check.get("warning"):
-            result.warnings.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.warnings.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
 
         # Check login page loads
         login_check = await self._check_endpoint(
@@ -215,7 +221,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "login_page", **login_check})
         if not login_check.get("success"):
-            result.errors.append(f"Login page not accessible: {login_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Login page not accessible: {login_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         # Check API health
@@ -248,7 +256,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "authentication_flow", **flow_check})
         if not flow_check.get("success"):
-            result.errors.append(f"Authentication flow not accessible: {flow_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Authentication flow not accessible: {flow_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         # Check outpost health (internal)
@@ -281,7 +291,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         # Check status endpoint (verifies backend connectivity)
@@ -291,7 +303,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "api_status", **status_check})
         if not status_check.get("success"):
-            result.warnings.append("Jellyseerr status API returned error (may need auth)")
+            result.warnings.append(
+                "Jellyseerr status API returned error (may need auth)"
+            )
 
         return result
 
@@ -313,7 +327,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         # Check identity endpoint (internal)
@@ -344,7 +360,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -365,7 +383,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -386,7 +406,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -414,8 +436,12 @@ class DeepHealthChecker:
         elif health_check.get("status_code") == 501:
             result.errors.append("Vault is not initialized")
             result.healthy = False
-        elif not health_check.get("success") and health_check.get("status_code") not in [429, 472, 473]:
-            result.errors.append(f"Vault health check failed: {health_check.get('error', 'Unknown')}")
+        elif not health_check.get("success") and health_check.get(
+            "status_code"
+        ) not in [429, 472, 473]:
+            result.errors.append(
+                f"Vault health check failed: {health_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -437,7 +463,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "api_health", **api_check})
         if not api_check.get("success"):
-            result.errors.append(f"Harbor API not healthy: {api_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Harbor API not healthy: {api_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -458,7 +486,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -502,7 +532,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -559,9 +591,13 @@ class DeepHealthChecker:
             result.errors.append(f"SSL certificate invalid: {ssl_check.get('error')}")
             result.healthy = False
         elif ssl_check.get("critical"):
-            result.errors.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.errors.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
         elif ssl_check.get("warning"):
-            result.warnings.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.warnings.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
 
         # Check internal health ping
         health_check = await self._check_endpoint(
@@ -643,9 +679,13 @@ class DeepHealthChecker:
             result.errors.append(f"SSL certificate invalid: {ssl_check.get('error')}")
             result.healthy = False
         elif ssl_check.get("critical"):
-            result.errors.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.errors.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
         elif ssl_check.get("warning"):
-            result.warnings.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.warnings.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
 
         # Check web interface
         web_check = await self._check_endpoint(
@@ -654,7 +694,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result
@@ -670,9 +712,13 @@ class DeepHealthChecker:
             result.errors.append(f"SSL certificate invalid: {ssl_check.get('error')}")
             result.healthy = False
         elif ssl_check.get("critical"):
-            result.errors.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.errors.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
         elif ssl_check.get("warning"):
-            result.warnings.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.warnings.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
 
         # Check web interface (200 or 401 for auth)
         web_check = await self._check_endpoint(
@@ -683,7 +729,9 @@ class DeepHealthChecker:
         if not web_check.get("success"):
             # 401 is also acceptable (auth required)
             if web_check.get("status_code") != 401:
-                result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+                result.errors.append(
+                    f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+                )
                 result.healthy = False
 
         return result
@@ -725,9 +773,13 @@ class DeepHealthChecker:
             result.errors.append(f"SSL certificate invalid: {ssl_check.get('error')}")
             result.healthy = False
         elif ssl_check.get("critical"):
-            result.errors.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.errors.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
         elif ssl_check.get("warning"):
-            result.warnings.append(f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days")
+            result.warnings.append(
+                f"SSL certificate expires in {ssl_check.get('days_until_expiry')} days"
+            )
 
         # Check web interface
         web_check = await self._check_endpoint(
@@ -736,7 +788,9 @@ class DeepHealthChecker:
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
-            result.errors.append(f"Web interface not accessible: {web_check.get('error', 'Unknown')}")
+            result.errors.append(
+                f"Web interface not accessible: {web_check.get('error', 'Unknown')}"
+            )
             result.healthy = False
 
         return result

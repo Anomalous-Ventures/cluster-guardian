@@ -14,7 +14,9 @@ from .config import settings
 
 logger = structlog.get_logger(__name__)
 
-PROMETHEUS_URL = "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+PROMETHEUS_URL = (
+    "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+)
 
 
 class PrometheusClient:
@@ -44,7 +46,9 @@ class PrometheusClient:
             logger.error("prometheus_query_failed", query=promql, error=str(e))
             return {"error": str(e), "result": []}
 
-    async def query_range(self, promql: str, start: str, end: str, step: str = "1m") -> dict:
+    async def query_range(
+        self, promql: str, start: str, end: str, step: str = "1m"
+    ) -> dict:
         """Execute a range PromQL query. start/end are RFC3339 or relative like 'now-1h'."""
         try:
             async with self._client() as client:
@@ -86,7 +90,9 @@ class PrometheusClient:
             "namespace": namespace,
             "cpu_cores": cores,
             "cpu_request_cores": request_cores,
-            "cpu_percent_of_request": round((cores / request_cores) * 100, 2) if request_cores else None,
+            "cpu_percent_of_request": round((cores / request_cores) * 100, 2)
+            if request_cores
+            else None,
         }
 
     async def get_pod_memory_usage(self, namespace: str, pod_name: str) -> dict:
@@ -114,7 +120,9 @@ class PrometheusClient:
             "namespace": namespace,
             "memory_bytes": mem_bytes,
             "memory_limit_bytes": limit_bytes,
-            "memory_percent_of_limit": round((mem_bytes / limit_bytes) * 100, 2) if limit_bytes else None,
+            "memory_percent_of_limit": round((mem_bytes / limit_bytes) * 100, 2)
+            if limit_bytes
+            else None,
         }
 
     async def get_namespace_resource_usage(self, namespace: str) -> dict:
@@ -143,15 +151,15 @@ class PrometheusClient:
             "pod_count": int(_extract_value(pods)),
         }
 
-    async def get_error_rate(self, namespace: str, service: str, window: str = "5m") -> dict:
+    async def get_error_rate(
+        self, namespace: str, service: str, window: str = "5m"
+    ) -> dict:
         """Get HTTP error rate (5xx/total) for a service over window."""
         errors_query = (
             f'sum(rate(traefik_service_requests_total{{service=~".*{service}.*",'
             f'code=~"5.."}}[{window}]))'
         )
-        total_query = (
-            f'sum(rate(traefik_service_requests_total{{service=~".*{service}.*"}}[{window}]))'
-        )
+        total_query = f'sum(rate(traefik_service_requests_total{{service=~".*{service}.*"}}[{window}]))'
 
         errors = await self.query(errors_query)
         total = await self.query(total_query)
@@ -171,13 +179,15 @@ class PrometheusClient:
             "total_rps": total_rps,
         }
 
-    async def get_request_latency(self, namespace: str, service: str, window: str = "5m") -> dict:
+    async def get_request_latency(
+        self, namespace: str, service: str, window: str = "5m"
+    ) -> dict:
         """Get p50/p95/p99 request latency for a service."""
         percentiles = {}
         for label, quantile in [("p50", "0.5"), ("p95", "0.95"), ("p99", "0.99")]:
             q = (
-                f'histogram_quantile({quantile},'
-                f'sum(rate(traefik_service_request_duration_seconds_bucket'
+                f"histogram_quantile({quantile},"
+                f"sum(rate(traefik_service_request_duration_seconds_bucket"
                 f'{{service=~".*{service}.*"}}[{window}])) by (le))'
             )
             result = await self.query(q)
@@ -198,12 +208,8 @@ class PrometheusClient:
             f'1 - avg(rate(node_cpu_seconds_total{{instance=~"{node_name}.*",'
             f'mode="idle"}}[5m]))'
         )
-        mem_avail_query = (
-            f'node_memory_MemAvailable_bytes{{instance=~"{node_name}.*"}}'
-        )
-        mem_total_query = (
-            f'node_memory_MemTotal_bytes{{instance=~"{node_name}.*"}}'
-        )
+        mem_avail_query = f'node_memory_MemAvailable_bytes{{instance=~"{node_name}.*"}}'
+        mem_total_query = f'node_memory_MemTotal_bytes{{instance=~"{node_name}.*"}}'
 
         cpu = await self.query(cpu_query)
         mem_avail = await self.query(mem_avail_query)
@@ -221,7 +227,9 @@ class PrometheusClient:
             "cpu_usage_percent": round(cpu_pct * 100, 2),
             "memory_available_bytes": avail,
             "memory_total_bytes": total,
-            "memory_usage_percent": round(((total - avail) / total) * 100, 2) if total else None,
+            "memory_usage_percent": round(((total - avail) / total) * 100, 2)
+            if total
+            else None,
         }
 
     async def get_alerts(self, state: str = "firing") -> list[dict]:
@@ -242,15 +250,23 @@ class PrometheusClient:
                         continue
                     for alert in rule.get("alerts", []):
                         if alert.get("state") == state:
-                            alerts.append({
-                                "name": rule.get("name"),
-                                "state": alert.get("state"),
-                                "severity": alert.get("labels", {}).get("severity", "unknown"),
-                                "summary": alert.get("annotations", {}).get("summary", ""),
-                                "description": alert.get("annotations", {}).get("description", ""),
-                                "labels": alert.get("labels", {}),
-                                "active_at": alert.get("activeAt"),
-                            })
+                            alerts.append(
+                                {
+                                    "name": rule.get("name"),
+                                    "state": alert.get("state"),
+                                    "severity": alert.get("labels", {}).get(
+                                        "severity", "unknown"
+                                    ),
+                                    "summary": alert.get("annotations", {}).get(
+                                        "summary", ""
+                                    ),
+                                    "description": alert.get("annotations", {}).get(
+                                        "description", ""
+                                    ),
+                                    "labels": alert.get("labels", {}),
+                                    "active_at": alert.get("activeAt"),
+                                }
+                            )
             return alerts
         except Exception as e:
             logger.error("prometheus_get_alerts_failed", error=str(e))

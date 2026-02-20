@@ -5,7 +5,6 @@ Provides safe, rate-limited access to Kubernetes operations
 for the Cluster Guardian agent.
 """
 
-import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from collections import deque
@@ -23,7 +22,12 @@ logger = structlog.get_logger(__name__)
 class ActionRateLimiter:
     """Rate limiter for remediation actions."""
 
-    def __init__(self, max_actions: int, window_seconds: int = 3600, redis_client: Optional[RedisClient] = None):
+    def __init__(
+        self,
+        max_actions: int,
+        window_seconds: int = 3600,
+        redis_client: Optional[RedisClient] = None,
+    ):
         self.max_actions = max_actions
         self.window_seconds = window_seconds
         self.actions: deque = deque()
@@ -34,7 +38,9 @@ class ActionRateLimiter:
         self._cleanup_old()
         if self.redis_client and self.redis_client.available:
             try:
-                redis_count = await self.redis_client.get_actions_in_window(self.window_seconds)
+                redis_count = await self.redis_client.get_actions_in_window(
+                    self.window_seconds
+                )
                 return redis_count < self.max_actions
             except Exception:
                 pass
@@ -135,7 +141,9 @@ class K8sClient:
         self.autoscaling_v2 = client.AutoscalingV2Api()
         self.policy_v1 = client.PolicyV1Api()
         self._redis_client = get_redis_client()
-        self.rate_limiter = ActionRateLimiter(settings.max_actions_per_hour, redis_client=self._redis_client)
+        self.rate_limiter = ActionRateLimiter(
+            settings.max_actions_per_hour, redis_client=self._redis_client
+        )
         self.audit_log = AuditLog(redis_client=self._redis_client)
 
     def _check_namespace_protected(self, namespace: str) -> bool:
@@ -157,7 +165,12 @@ class K8sClient:
             return {
                 "name": node.metadata.name,
                 "conditions": [
-                    {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
+                    {
+                        "type": c.type,
+                        "status": c.status,
+                        "reason": c.reason,
+                        "message": c.message,
+                    }
                     for c in (node.status.conditions or [])
                 ],
                 "allocatable": {
@@ -185,19 +198,20 @@ class K8sClient:
                     if label.startswith("node-role.kubernetes.io/")
                 ]
                 conditions_summary = {
-                    c.type: c.status
-                    for c in (node.status.conditions or [])
+                    c.type: c.status for c in (node.status.conditions or [])
                 }
-                nodes.append({
-                    "name": node.metadata.name,
-                    "roles": roles,
-                    "conditions": conditions_summary,
-                    "taints": [
-                        {"key": t.key, "value": t.value, "effect": t.effect}
-                        for t in (node.spec.taints or [])
-                    ],
-                    "unschedulable": node.spec.unschedulable or False,
-                })
+                nodes.append(
+                    {
+                        "name": node.metadata.name,
+                        "roles": roles,
+                        "conditions": conditions_summary,
+                        "taints": [
+                            {"key": t.key, "value": t.value, "effect": t.effect}
+                            for t in (node.spec.taints or [])
+                        ],
+                        "unschedulable": node.spec.unschedulable or False,
+                    }
+                )
         except ApiException as e:
             logger.error("Failed to list nodes", error=str(e))
         return nodes
@@ -226,7 +240,9 @@ class K8sClient:
                 "node": pod.spec.node_name,
             }
         except ApiException as e:
-            logger.error("Failed to get pod status", namespace=namespace, name=name, error=str(e))
+            logger.error(
+                "Failed to get pod status", namespace=namespace, name=name, error=str(e)
+            )
             return {"error": str(e)}
 
     def _get_container_state(self, state) -> Dict[str, Any]:
@@ -234,7 +250,11 @@ class K8sClient:
         if state.running:
             return {"state": "running", "started_at": str(state.running.started_at)}
         elif state.waiting:
-            return {"state": "waiting", "reason": state.waiting.reason, "message": state.waiting.message}
+            return {
+                "state": "waiting",
+                "reason": state.waiting.reason,
+                "message": state.waiting.message,
+            }
         elif state.terminated:
             return {
                 "state": "terminated",
@@ -251,15 +271,20 @@ class K8sClient:
             for pod in pods.items:
                 if pod.metadata.namespace in settings.protected_namespaces:
                     continue
-                for cs in (pod.status.container_statuses or []):
-                    if cs.state.waiting and cs.state.waiting.reason == "CrashLoopBackOff":
-                        crashing_pods.append({
-                            "name": pod.metadata.name,
-                            "namespace": pod.metadata.namespace,
-                            "container": cs.name,
-                            "restart_count": cs.restart_count,
-                            "message": cs.state.waiting.message,
-                        })
+                for cs in pod.status.container_statuses or []:
+                    if (
+                        cs.state.waiting
+                        and cs.state.waiting.reason == "CrashLoopBackOff"
+                    ):
+                        crashing_pods.append(
+                            {
+                                "name": pod.metadata.name,
+                                "namespace": pod.metadata.namespace,
+                                "container": cs.name,
+                                "restart_count": cs.restart_count,
+                                "message": cs.state.waiting.message,
+                            }
+                        )
         except ApiException as e:
             logger.error("Failed to list pods", error=str(e))
         return crashing_pods
@@ -281,10 +306,14 @@ class K8sClient:
                 ],
             }
         except ApiException as e:
-            logger.error("Failed to get deployment", namespace=namespace, name=name, error=str(e))
+            logger.error(
+                "Failed to get deployment", namespace=namespace, name=name, error=str(e)
+            )
             return {"error": str(e)}
 
-    async def get_events(self, namespace: str, involved_object: Optional[str] = None) -> List[Dict]:
+    async def get_events(
+        self, namespace: str, involved_object: Optional[str] = None
+    ) -> List[Dict]:
         """Get recent events for a namespace or object."""
         try:
             if involved_object:
@@ -304,7 +333,11 @@ class K8sClient:
                     "last_timestamp": str(e.last_timestamp),
                     "involved_object": f"{e.involved_object.kind}/{e.involved_object.name}",
                 }
-                for e in sorted(events.items, key=lambda x: x.last_timestamp or datetime.min, reverse=True)[:20]
+                for e in sorted(
+                    events.items,
+                    key=lambda x: x.last_timestamp or datetime.min,
+                    reverse=True,
+                )[:20]
             ]
         except ApiException as e:
             logger.error("Failed to get events", namespace=namespace, error=str(e))
@@ -333,7 +366,9 @@ class K8sClient:
                 logs = logs[-5000:]
             return logs
         except ApiException as e:
-            logger.error("Failed to get pod logs", namespace=namespace, name=name, error=str(e))
+            logger.error(
+                "Failed to get pod logs", namespace=namespace, name=name, error=str(e)
+            )
             return f"Error fetching logs: {e}"
 
     async def get_statefulset_status(self, namespace: str, name: str) -> Dict[str, Any]:
@@ -352,10 +387,17 @@ class K8sClient:
                 ],
             }
         except ApiException as e:
-            logger.error("Failed to get statefulset status", namespace=namespace, name=name, error=str(e))
+            logger.error(
+                "Failed to get statefulset status",
+                namespace=namespace,
+                name=name,
+                error=str(e),
+            )
             return {"error": str(e)}
 
-    async def get_failed_jobs(self, namespace: str | None = None) -> List[Dict[str, Any]]:
+    async def get_failed_jobs(
+        self, namespace: str | None = None
+    ) -> List[Dict[str, Any]]:
         """Get all failed jobs, optionally filtered to a namespace."""
         failed_jobs: List[Dict[str, Any]] = []
         try:
@@ -367,15 +409,17 @@ class K8sClient:
             for job in job_list.items:
                 if job.metadata.namespace in settings.protected_namespaces:
                     continue
-                for condition in (job.status.conditions or []):
+                for condition in job.status.conditions or []:
                     if condition.type == "Failed" and condition.status == "True":
-                        failed_jobs.append({
-                            "name": job.metadata.name,
-                            "namespace": job.metadata.namespace,
-                            "start_time": str(job.status.start_time),
-                            "completions": job.spec.completions,
-                            "failed": job.status.failed or 0,
-                        })
+                        failed_jobs.append(
+                            {
+                                "name": job.metadata.name,
+                                "namespace": job.metadata.namespace,
+                                "start_time": str(job.status.start_time),
+                                "completions": job.spec.completions,
+                                "failed": job.status.failed or 0,
+                            }
+                        )
                         break
         except ApiException as e:
             logger.error("Failed to list jobs", error=str(e))
@@ -384,15 +428,21 @@ class K8sClient:
     async def get_hpa_status(self, namespace: str, name: str) -> Dict[str, Any]:
         """Get HorizontalPodAutoscaler status including metrics and conditions."""
         try:
-            hpa = self.autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(name, namespace)
+            hpa = self.autoscaling_v2.read_namespaced_horizontal_pod_autoscaler(
+                name, namespace
+            )
             current_metrics = []
-            for metric in (hpa.status.current_metrics or []):
+            for metric in hpa.status.current_metrics or []:
                 entry: Dict[str, Any] = {"type": metric.type}
                 if metric.resource:
                     entry["resource_name"] = metric.resource.name
                     if metric.resource.current:
-                        entry["current_average_utilization"] = metric.resource.current.average_utilization
-                        entry["current_average_value"] = str(metric.resource.current.average_value)
+                        entry["current_average_utilization"] = (
+                            metric.resource.current.average_utilization
+                        )
+                        entry["current_average_value"] = str(
+                            metric.resource.current.average_value
+                        )
                 current_metrics.append(entry)
             return {
                 "name": hpa.metadata.name,
@@ -402,12 +452,19 @@ class K8sClient:
                 "current_replicas": hpa.status.current_replicas or 0,
                 "current_metrics": current_metrics,
                 "conditions": [
-                    {"type": c.type, "status": c.status, "reason": c.reason, "message": c.message}
+                    {
+                        "type": c.type,
+                        "status": c.status,
+                        "reason": c.reason,
+                        "message": c.message,
+                    }
                     for c in (hpa.status.conditions or [])
                 ],
             }
         except ApiException as e:
-            logger.error("Failed to get HPA status", namespace=namespace, name=name, error=str(e))
+            logger.error(
+                "Failed to get HPA status", namespace=namespace, name=name, error=str(e)
+            )
             return {"error": str(e)}
 
     async def get_pdb_status(self, namespace: str) -> List[Dict[str, Any]]:
@@ -416,13 +473,19 @@ class K8sClient:
         try:
             pdb_list = self.policy_v1.list_namespaced_pod_disruption_budget(namespace)
             for pdb in pdb_list.items:
-                pdbs.append({
-                    "name": pdb.metadata.name,
-                    "min_available": str(pdb.spec.min_available) if pdb.spec.min_available is not None else None,
-                    "max_unavailable": str(pdb.spec.max_unavailable) if pdb.spec.max_unavailable is not None else None,
-                    "current_healthy": pdb.status.current_healthy,
-                    "disruptions_allowed": pdb.status.disruptions_allowed,
-                })
+                pdbs.append(
+                    {
+                        "name": pdb.metadata.name,
+                        "min_available": str(pdb.spec.min_available)
+                        if pdb.spec.min_available is not None
+                        else None,
+                        "max_unavailable": str(pdb.spec.max_unavailable)
+                        if pdb.spec.max_unavailable is not None
+                        else None,
+                        "current_healthy": pdb.status.current_healthy,
+                        "disruptions_allowed": pdb.status.disruptions_allowed,
+                    }
+                )
         except ApiException as e:
             logger.error("Failed to list PDBs", namespace=namespace, error=str(e))
         return pdbs
@@ -431,7 +494,9 @@ class K8sClient:
     # WRITE OPERATIONS (rate limited, audit logged)
     # =========================================================================
 
-    async def restart_pod(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def restart_pod(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Delete a pod to trigger restart (if managed by a controller)."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -486,7 +551,9 @@ class K8sClient:
                 namespace,
                 {"spec": {"replicas": replicas}},
             )
-            await self.rate_limiter.record_action(f"scale_deployment:{namespace}/{name}")
+            await self.rate_limiter.record_action(
+                f"scale_deployment:{namespace}/{name}"
+            )
             await self.audit_log.log(
                 action="scale_deployment",
                 target=name,
@@ -495,8 +562,13 @@ class K8sClient:
                 result="success",
                 details={"replicas": replicas},
             )
-            logger.info("Scaled deployment", namespace=namespace, name=name, replicas=replicas)
-            return {"success": True, "message": f"Deployment {name} scaled to {replicas}"}
+            logger.info(
+                "Scaled deployment", namespace=namespace, name=name, replicas=replicas
+            )
+            return {
+                "success": True,
+                "message": f"Deployment {name} scaled to {replicas}",
+            }
         except ApiException as e:
             await self.audit_log.log(
                 action="scale_deployment",
@@ -508,7 +580,9 @@ class K8sClient:
             )
             return {"success": False, "error": str(e)}
 
-    async def rollout_restart(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def rollout_restart(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Trigger a rollout restart for a deployment."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -538,8 +612,13 @@ class K8sClient:
                 reason=reason,
                 result="success",
             )
-            logger.info("Rollout restart", namespace=namespace, name=name, reason=reason)
-            return {"success": True, "message": f"Deployment {name} rollout restart triggered"}
+            logger.info(
+                "Rollout restart", namespace=namespace, name=name, reason=reason
+            )
+            return {
+                "success": True,
+                "message": f"Deployment {name} rollout restart triggered",
+            }
         except ApiException as e:
             await self.audit_log.log(
                 action="rollout_restart",
@@ -551,7 +630,9 @@ class K8sClient:
             )
             return {"success": False, "error": str(e)}
 
-    async def rollback_deployment(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def rollback_deployment(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Rollback a deployment to its previous ReplicaSet template."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -566,8 +647,10 @@ class K8sClient:
                 label_selector=",".join(
                     f"{k}={v}"
                     for k, v in (
-                        self.apps_v1.read_namespaced_deployment(name, namespace)
-                        .spec.selector.match_labels or {}
+                        self.apps_v1.read_namespaced_deployment(
+                            name, namespace
+                        ).spec.selector.match_labels
+                        or {}
                     ).items()
                 ),
             )
@@ -575,7 +658,7 @@ class K8sClient:
             # Filter to RS owned by this deployment and sort by revision
             owned_rs = []
             for rs in rs_list.items:
-                for ref in (rs.metadata.owner_references or []):
+                for ref in rs.metadata.owner_references or []:
                     if ref.kind == "Deployment" and ref.name == name:
                         revision = int(
                             (rs.metadata.annotations or {}).get(
@@ -586,7 +669,10 @@ class K8sClient:
                         break
 
             if len(owned_rs) < 2:
-                return {"success": False, "error": "No previous revision found to rollback to"}
+                return {
+                    "success": False,
+                    "error": "No previous revision found to rollback to",
+                }
 
             # Sort by revision descending; second entry is the previous RS
             owned_rs.sort(key=lambda x: x[0], reverse=True)
@@ -600,7 +686,9 @@ class K8sClient:
             }
             self.apps_v1.patch_namespaced_deployment(name, namespace, patch)
 
-            await self.rate_limiter.record_action(f"rollback_deployment:{namespace}/{name}")
+            await self.rate_limiter.record_action(
+                f"rollback_deployment:{namespace}/{name}"
+            )
             await self.audit_log.log(
                 action="rollback_deployment",
                 target=name,
@@ -609,7 +697,9 @@ class K8sClient:
                 result="success",
                 details={"rolled_back_to_revision": owned_rs[1][0]},
             )
-            logger.info("Rolled back deployment", namespace=namespace, name=name, reason=reason)
+            logger.info(
+                "Rolled back deployment", namespace=namespace, name=name, reason=reason
+            )
             return {
                 "success": True,
                 "message": f"Deployment {name} rolled back to revision {owned_rs[1][0]}",
@@ -625,7 +715,9 @@ class K8sClient:
             )
             return {"success": False, "error": str(e)}
 
-    async def rollout_restart_statefulset(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def rollout_restart_statefulset(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Trigger a rollout restart for a StatefulSet."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -646,7 +738,9 @@ class K8sClient:
                 }
             }
             self.apps_v1.patch_namespaced_stateful_set(name, namespace, patch)
-            await self.rate_limiter.record_action(f"rollout_restart_statefulset:{namespace}/{name}")
+            await self.rate_limiter.record_action(
+                f"rollout_restart_statefulset:{namespace}/{name}"
+            )
             await self.audit_log.log(
                 action="rollout_restart_statefulset",
                 target=name,
@@ -654,8 +748,16 @@ class K8sClient:
                 reason=reason,
                 result="success",
             )
-            logger.info("Rollout restart statefulset", namespace=namespace, name=name, reason=reason)
-            return {"success": True, "message": f"StatefulSet {name} rollout restart triggered"}
+            logger.info(
+                "Rollout restart statefulset",
+                namespace=namespace,
+                name=name,
+                reason=reason,
+            )
+            return {
+                "success": True,
+                "message": f"StatefulSet {name} rollout restart triggered",
+            }
         except ApiException as e:
             await self.audit_log.log(
                 action="rollout_restart_statefulset",
@@ -667,7 +769,9 @@ class K8sClient:
             )
             return {"success": False, "error": str(e)}
 
-    async def delete_failed_job(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def delete_failed_job(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Delete a failed job to allow retry."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -681,7 +785,9 @@ class K8sClient:
                 namespace,
                 propagation_policy="Background",
             )
-            await self.rate_limiter.record_action(f"delete_failed_job:{namespace}/{name}")
+            await self.rate_limiter.record_action(
+                f"delete_failed_job:{namespace}/{name}"
+            )
             await self.audit_log.log(
                 action="delete_failed_job",
                 target=name,
@@ -689,7 +795,9 @@ class K8sClient:
                 reason=reason,
                 result="success",
             )
-            logger.info("Deleted failed job", namespace=namespace, name=name, reason=reason)
+            logger.info(
+                "Deleted failed job", namespace=namespace, name=name, reason=reason
+            )
             return {"success": True, "message": f"Failed job {name} deleted"}
         except ApiException as e:
             await self.audit_log.log(
@@ -702,7 +810,9 @@ class K8sClient:
             )
             return {"success": False, "error": str(e)}
 
-    async def delete_pvc(self, namespace: str, name: str, reason: str) -> Dict[str, Any]:
+    async def delete_pvc(
+        self, namespace: str, name: str, reason: str
+    ) -> Dict[str, Any]:
         """Delete a PVC (requires approval by default)."""
         if self._check_namespace_protected(namespace):
             return {"success": False, "error": f"Namespace {namespace} is protected"}
@@ -795,13 +905,17 @@ class K8sClient:
             for pod in pods.items:
                 # Skip pods in protected namespaces
                 if pod.metadata.namespace in settings.protected_namespaces:
-                    skipped.append(f"{pod.metadata.namespace}/{pod.metadata.name} (protected namespace)")
+                    skipped.append(
+                        f"{pod.metadata.namespace}/{pod.metadata.name} (protected namespace)"
+                    )
                     continue
 
                 # Skip DaemonSet-owned pods
                 owner_refs = pod.metadata.owner_references or []
                 if any(ref.kind == "DaemonSet" for ref in owner_refs):
-                    skipped.append(f"{pod.metadata.namespace}/{pod.metadata.name} (DaemonSet)")
+                    skipped.append(
+                        f"{pod.metadata.namespace}/{pod.metadata.name} (DaemonSet)"
+                    )
                     continue
 
                 # Evict the pod
@@ -819,7 +933,9 @@ class K8sClient:
                     )
                     evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
                 except ApiException as evict_err:
-                    skipped.append(f"{pod.metadata.namespace}/{pod.metadata.name} (eviction failed: {evict_err.reason})")
+                    skipped.append(
+                        f"{pod.metadata.namespace}/{pod.metadata.name} (eviction failed: {evict_err.reason})"
+                    )
 
             await self.rate_limiter.record_action(f"drain_node:{name}")
             await self.audit_log.log(
@@ -830,7 +946,9 @@ class K8sClient:
                 result="success",
                 details={"evicted": len(evicted), "skipped": len(skipped)},
             )
-            logger.info("Drained node", name=name, evicted=len(evicted), skipped=len(skipped))
+            logger.info(
+                "Drained node", name=name, evicted=len(evicted), skipped=len(skipped)
+            )
             return {
                 "success": True,
                 "message": f"Node {name} drained",

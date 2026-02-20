@@ -9,10 +9,9 @@ The agent can:
 - Learn from past issues and solutions
 """
 
-from typing import Dict, List, Any, Optional, TypedDict, Annotated, Literal
+from typing import Dict, List, Any, Optional, TypedDict, Literal
 from datetime import datetime
 import json
-import asyncio
 import structlog
 
 from langchain_openai import ChatOpenAI
@@ -30,7 +29,7 @@ except ImportError:
 from .config import settings
 from .k8s_client import get_k8s_client, K8sClient
 from .k8sgpt_client import get_k8sgpt_client, K8sGPTClient
-from .health_checks import get_health_checker, DeepHealthChecker, HealthCheckResult
+from .health_checks import get_health_checker, DeepHealthChecker
 from .memory import get_memory
 from .metrics import guardian_agent_iterations_total, guardian_rate_limit_remaining
 from . import notifier
@@ -39,7 +38,7 @@ from .prometheus_client import get_prometheus_client
 from .loki_client import get_loki_client
 from .cert_monitor import get_cert_monitor
 from .storage_monitor import get_storage_monitor
-from .security_client import get_crowdsec_client, get_falco_processor
+from .security_client import get_crowdsec_client
 from .gatus_client import get_gatus_client
 
 logger = structlog.get_logger(__name__)
@@ -49,8 +48,10 @@ logger = structlog.get_logger(__name__)
 # STATE DEFINITION
 # =============================================================================
 
+
 class GuardianState(TypedDict):
     """State for the Cluster Guardian agent."""
+
     messages: List[Any]
     issues: List[Dict[str, Any]]
     health_results: List[Dict[str, Any]]
@@ -63,6 +64,7 @@ class GuardianState(TypedDict):
 # =============================================================================
 # TOOLS FOR THE AGENT
 # =============================================================================
+
 
 def create_tools(
     k8s: K8sClient,
@@ -89,8 +91,12 @@ def create_tools(
 
         lines = ["K8sGPT detected the following issues:"]
         for issue in issues:
-            errors_str = ", ".join(issue['errors'][:3]) if issue['errors'] else "Unknown error"
-            lines.append(f"- {issue['kind']}/{issue['name']} in {issue['namespace']}: {errors_str}")
+            errors_str = (
+                ", ".join(issue["errors"][:3]) if issue["errors"] else "Unknown error"
+            )
+            lines.append(
+                f"- {issue['kind']}/{issue['name']} in {issue['namespace']}: {errors_str}"
+            )
 
         return "\n".join(lines)
 
@@ -159,7 +165,9 @@ def create_tools(
         return json.dumps(status, indent=2)
 
     @tool
-    async def get_recent_events(namespace: str, object_name: Optional[str] = None) -> str:
+    async def get_recent_events(
+        namespace: str, object_name: Optional[str] = None
+    ) -> str:
         """
         Get recent Kubernetes events for a namespace or specific object.
 
@@ -193,7 +201,9 @@ def create_tools(
             return f"Failed to restart pod: {result.get('error', 'Unknown error')}"
 
     @tool
-    async def rollout_restart_deployment(namespace: str, deployment_name: str, reason: str) -> str:
+    async def rollout_restart_deployment(
+        namespace: str, deployment_name: str, reason: str
+    ) -> str:
         """
         Trigger a rollout restart for a deployment (restarts all pods gracefully).
 
@@ -209,7 +219,9 @@ def create_tools(
             return f"Failed to rollout restart: {result.get('error', 'Unknown error')}"
 
     @tool
-    async def scale_deployment(namespace: str, deployment_name: str, replicas: int, reason: str) -> str:
+    async def scale_deployment(
+        namespace: str, deployment_name: str, replicas: int, reason: str
+    ) -> str:
         """
         Scale a deployment to specified number of replicas.
 
@@ -219,7 +231,9 @@ def create_tools(
             replicas: Target number of replicas
             reason: Reason for scaling (for audit log)
         """
-        result = await k8s.scale_deployment(namespace, deployment_name, replicas, reason)
+        result = await k8s.scale_deployment(
+            namespace, deployment_name, replicas, reason
+        )
         if result["success"]:
             return f"Successfully scaled {deployment_name} to {replicas} replicas"
         elif result.get("requires_approval"):
@@ -273,7 +287,9 @@ def create_tools(
         if not settings.github_token:
             return "GitHub token not configured. Cannot create PR."
 
-        branch_name = f"guardian/{title.replace(' ', '-').replace('/', '-')[:50].lower()}"
+        branch_name = (
+            f"guardian/{title.replace(' ', '-').replace('/', '-')[:50].lower()}"
+        )
         try:
             await github_client.create_branch(branch_name)
             await github_client.create_or_update_file(
@@ -288,7 +304,11 @@ def create_tools(
                 body=pr_body,
                 branch=branch_name,
             )
-            notifier.send_wazuh_syslog("create_pr", "success", {"pr_number": pr_info["number"], "branch": branch_name})
+            notifier.send_wazuh_syslog(
+                "create_pr",
+                "success",
+                {"pr_number": pr_info["number"], "branch": branch_name},
+            )
             return f"PR #{pr_info['number']} created: {pr_info['html_url']}"
         except Exception as exc:
             notifier.send_wazuh_syslog("create_pr", "failed", {"error": str(exc)})
@@ -501,13 +521,17 @@ def create_tools(
             return "No firing Prometheus alerts."
         lines = [f"Firing alerts ({len(alerts)}):"]
         for a in alerts:
-            lines.append(f"- [{a.get('severity','?')}] {a['name']}: {a.get('summary','')}")
+            lines.append(
+                f"- [{a.get('severity', '?')}] {a['name']}: {a.get('summary', '')}"
+            )
         return "\n".join(lines)
 
     # ----- Loki / Log Tools -----
 
     @tool
-    async def get_pod_logs_from_loki(namespace: str, pod_name: str, since: str = "1h") -> str:
+    async def get_pod_logs_from_loki(
+        namespace: str, pod_name: str, since: str = "1h"
+    ) -> str:
         """Get recent logs for a pod from Loki (centralized logging).
 
         Args:
@@ -532,7 +556,9 @@ def create_tools(
         return await loki.get_namespace_errors(namespace, since=since)
 
     @tool
-    async def search_cluster_logs(query_text: str, namespace: Optional[str] = None, since: str = "1h") -> str:
+    async def search_cluster_logs(
+        query_text: str, namespace: Optional[str] = None, since: str = "1h"
+    ) -> str:
         """Search logs across the cluster or a namespace for a text pattern.
 
         Args:
@@ -547,7 +573,12 @@ def create_tools(
     # ----- Kubernetes Extended Operations -----
 
     @tool
-    async def get_pod_k8s_logs(namespace: str, pod_name: str, container: Optional[str] = None, previous: bool = False) -> str:
+    async def get_pod_k8s_logs(
+        namespace: str,
+        pod_name: str,
+        container: Optional[str] = None,
+        previous: bool = False,
+    ) -> str:
         """Get logs directly from a pod via the Kubernetes API.
         Use for pods not yet indexed in Loki, or to get previous container logs after a crash.
 
@@ -557,10 +588,14 @@ def create_tools(
             container: Optional container name (for multi-container pods)
             previous: If True, get logs from the previous (crashed) container
         """
-        return await k8s.get_pod_logs(namespace, pod_name, container=container, previous=previous)
+        return await k8s.get_pod_logs(
+            namespace, pod_name, container=container, previous=previous
+        )
 
     @tool
-    async def rollback_deployment(namespace: str, deployment_name: str, reason: str) -> str:
+    async def rollback_deployment(
+        namespace: str, deployment_name: str, reason: str
+    ) -> str:
         """Rollback a deployment to its previous revision.
 
         Args:
@@ -574,7 +609,9 @@ def create_tools(
         return f"Rollback failed: {result.get('error', 'Unknown error')}"
 
     @tool
-    async def rollout_restart_statefulset(namespace: str, statefulset_name: str, reason: str) -> str:
+    async def rollout_restart_statefulset(
+        namespace: str, statefulset_name: str, reason: str
+    ) -> str:
         """Trigger a rollout restart for a StatefulSet.
 
         Args:
@@ -582,7 +619,9 @@ def create_tools(
             statefulset_name: Name of the StatefulSet
             reason: Reason for restart (for audit log)
         """
-        result = await k8s.rollout_restart_statefulset(namespace, statefulset_name, reason)
+        result = await k8s.rollout_restart_statefulset(
+            namespace, statefulset_name, reason
+        )
         if result["success"]:
             return f"Successfully triggered rollout restart for StatefulSet {statefulset_name}"
         return f"Failed to restart StatefulSet: {result.get('error', 'Unknown error')}"
@@ -611,7 +650,9 @@ def create_tools(
             return f"No failed jobs in {scope}."
         lines = [f"Failed jobs ({len(jobs)}):"]
         for j in jobs:
-            lines.append(f"- {j['namespace']}/{j['name']}: {j['failed']} failures (started {j['start_time']})")
+            lines.append(
+                f"- {j['namespace']}/{j['name']}: {j['failed']} failures (started {j['start_time']})"
+            )
         return "\n".join(lines)
 
     @tool
@@ -668,8 +709,14 @@ def create_tools(
         lines = [f"Certificate issues ({len(failing)}):"]
         for c in failing:
             status = "NOT READY" if not c["ready"] else "EXPIRING SOON"
-            days = f" ({c['days_until_expiry']:.0f}d remaining)" if c["days_until_expiry"] is not None else ""
-            lines.append(f"- [{status}] {c['namespace']}/{c['name']}{days}: {c.get('message','')}")
+            days = (
+                f" ({c['days_until_expiry']:.0f}d remaining)"
+                if c["days_until_expiry"] is not None
+                else ""
+            )
+            lines.append(
+                f"- [{status}] {c['namespace']}/{c['name']}{days}: {c.get('message', '')}"
+            )
         return "\n".join(lines)
 
     @tool
@@ -698,7 +745,9 @@ def create_tools(
             return "All Longhorn volumes are healthy."
         lines = [f"Degraded volumes ({len(volumes)}):"]
         for v in volumes:
-            lines.append(f"- {v['name']}: state={v['state']} robustness={v['robustness']} replicas={v['replicas']}/{v['number_of_replicas']}")
+            lines.append(
+                f"- {v['name']}: state={v['state']} robustness={v['robustness']} replicas={v['replicas']}/{v['number_of_replicas']}"
+            )
         return "\n".join(lines)
 
     @tool
@@ -729,7 +778,9 @@ def create_tools(
             return "No active CrowdSec decisions."
         lines = [f"Active CrowdSec decisions ({len(decisions)}):"]
         for d in decisions:
-            lines.append(f"- [{d['type']}] {d['scope']}:{d['value']} scenario={d['scenario']} duration={d['duration']}")
+            lines.append(
+                f"- [{d['type']}] {d['scope']}:{d['value']} scenario={d['scenario']} duration={d['duration']}"
+            )
         return "\n".join(lines)
 
     @tool
@@ -746,7 +797,9 @@ def create_tools(
             return "No recent CrowdSec alerts."
         lines = [f"Recent CrowdSec alerts ({len(alerts)}):"]
         for a in alerts:
-            lines.append(f"- [{a['created_at']}] {a['scenario']} from {a['source_ip']} ({a['events_count']} events)")
+            lines.append(
+                f"- [{a['created_at']}] {a['scenario']} from {a['source_ip']} ({a['events_count']} events)"
+            )
         return "\n".join(lines)
 
     # ----- Status Page -----
@@ -825,6 +878,7 @@ def create_tools(
 # =============================================================================
 # AGENT GRAPH
 # =============================================================================
+
 
 class ClusterGuardian:
     """
@@ -912,7 +966,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         self.loki = get_loki_client()
         self.cert_monitor = get_cert_monitor()
         self.storage_monitor = get_storage_monitor()
-        self.crowdsec = get_crowdsec_client(lapi_url=settings.crowdsec_lapi_url, api_key=settings.crowdsec_api_key)
+        self.crowdsec = get_crowdsec_client(
+            lapi_url=settings.crowdsec_lapi_url, api_key=settings.crowdsec_api_key
+        )
         self.gatus = get_gatus_client()
 
         # Create LLM
@@ -940,7 +996,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
 
         # Create tools
         self.tools = create_tools(
-            self.k8s, self.k8sgpt, self.health_checker,
+            self.k8s,
+            self.k8sgpt,
+            self.health_checker,
             prometheus=self.prometheus,
             loki=self.loki,
             cert_monitor=self.cert_monitor,
@@ -963,7 +1021,10 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         def should_continue(state: GuardianState) -> Literal["tools", "end"]:
             """Determine if we should continue to tools or end."""
             if state["iteration"] >= MAX_ITERATIONS:
-                logger.warning("Max iterations reached, ending agent loop", iteration=state["iteration"])
+                logger.warning(
+                    "Max iterations reached, ending agent loop",
+                    iteration=state["iteration"],
+                )
                 return "end"
 
             messages = state["messages"]
@@ -987,7 +1048,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             # On final iteration, call LLM without tools to force a text summary
             if state["iteration"] >= MAX_ITERATIONS - 1:
                 messages_with_summary = messages + [
-                    HumanMessage(content="Summarize your findings and actions taken in a concise report.")
+                    HumanMessage(
+                        content="Summarize your findings and actions taken in a concise report."
+                    )
                 ]
                 response = await self.llm.ainvoke(messages_with_summary)
             else:
@@ -1067,7 +1130,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                     if agent_state.get("messages"):
                         last_msg = agent_state["messages"][-1]
                         if hasattr(last_msg, "content") and last_msg.content:
-                            logger.debug("Agent response", content=last_msg.content[:200])
+                            logger.debug(
+                                "Agent response", content=last_msg.content[:200]
+                            )
 
             # Extract summary from final state
             messages = []
@@ -1110,7 +1175,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-    async def investigate_issue(self, description: str, thread_id: str = "guardian-investigate") -> Dict[str, Any]:
+    async def investigate_issue(
+        self, description: str, thread_id: str = "guardian-investigate"
+    ) -> Dict[str, Any]:
         """
         Investigate a specific issue reported by a user or alert.
 

@@ -134,7 +134,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
 
     # Prometheus
-    prometheus_url: str = "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+    prometheus_url: str = (
+        "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
+    )
 
     # Loki
     loki_url: str = "http://loki.prometheus.svc.cluster.local:3100"
@@ -144,7 +146,9 @@ class Settings(BaseSettings):
     crowdsec_api_key: Optional[str] = None
 
     # Longhorn
-    longhorn_url: str = "http://longhorn-frontend.longhorn-system.svc.cluster.local:8000"
+    longhorn_url: str = (
+        "http://longhorn-frontend.longhorn-system.svc.cluster.local:8000"
+    )
 
     # Gatus Status Page
     gatus_url: str = "http://gatus.status.svc.cluster.local:80"

@@ -5,7 +5,7 @@ Watches Certificate, CertificateRequest, Issuer, and ClusterIssuer
 resources for renewal failures and approaching expiration.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -65,11 +65,16 @@ class CertMonitor:
         try:
             if namespace:
                 resp = self.custom_api.list_namespaced_custom_object(
-                    CERT_GROUP, CERT_VERSION, namespace, "certificates",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    namespace,
+                    "certificates",
                 )
             else:
                 resp = self.custom_api.list_cluster_custom_object(
-                    CERT_GROUP, CERT_VERSION, "certificates",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    "certificates",
                 )
         except Exception as exc:
             logger.error("Failed to list certificates", error=str(exc))
@@ -83,17 +88,19 @@ class CertMonitor:
             ready, message = self._parse_ready_condition(status)
             not_after = self._parse_not_after(status)
 
-            results.append({
-                "name": meta.get("name"),
-                "namespace": meta.get("namespace"),
-                "dns_names": spec.get("dnsNames", []),
-                "ready": ready,
-                "not_after": not_after.isoformat() if not_after else None,
-                "days_until_expiry": self._days_until(not_after),
-                "renewal_time": status.get("renewalTime"),
-                "issuer": spec.get("issuerRef", {}).get("name"),
-                "message": message,
-            })
+            results.append(
+                {
+                    "name": meta.get("name"),
+                    "namespace": meta.get("namespace"),
+                    "dns_names": spec.get("dnsNames", []),
+                    "ready": ready,
+                    "not_after": not_after.isoformat() if not_after else None,
+                    "days_until_expiry": self._days_until(not_after),
+                    "renewal_time": status.get("renewalTime"),
+                    "issuer": spec.get("issuerRef", {}).get("name"),
+                    "message": message,
+                }
+            )
 
         return results
 
@@ -112,7 +119,9 @@ class CertMonitor:
                 failing.append(cert)
         return failing
 
-    async def get_certificate_requests(self, namespace: str | None = None) -> list[dict]:
+    async def get_certificate_requests(
+        self, namespace: str | None = None
+    ) -> list[dict]:
         """List CertificateRequest resources to check for failed issuance.
 
         CRD: certificaterequests.cert-manager.io/v1
@@ -120,11 +129,16 @@ class CertMonitor:
         try:
             if namespace:
                 resp = self.custom_api.list_namespaced_custom_object(
-                    CERT_GROUP, CERT_VERSION, namespace, "certificaterequests",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    namespace,
+                    "certificaterequests",
                 )
             else:
                 resp = self.custom_api.list_cluster_custom_object(
-                    CERT_GROUP, CERT_VERSION, "certificaterequests",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    "certificaterequests",
                 )
         except Exception as exc:
             logger.error("Failed to list certificate requests", error=str(exc))
@@ -137,14 +151,16 @@ class CertMonitor:
             status = item.get("status", {})
             ready, message = self._parse_ready_condition(status)
 
-            results.append({
-                "name": meta.get("name"),
-                "namespace": meta.get("namespace"),
-                "issuer": spec.get("issuerRef", {}).get("name"),
-                "ready": ready,
-                "message": message,
-                "conditions": status.get("conditions", []),
-            })
+            results.append(
+                {
+                    "name": meta.get("name"),
+                    "namespace": meta.get("namespace"),
+                    "issuer": spec.get("issuerRef", {}).get("name"),
+                    "ready": ready,
+                    "message": message,
+                    "conditions": status.get("conditions", []),
+                }
+            )
 
         return results
 
@@ -159,42 +175,53 @@ class CertMonitor:
         try:
             if namespace:
                 resp = self.custom_api.list_namespaced_custom_object(
-                    CERT_GROUP, CERT_VERSION, namespace, "issuers",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    namespace,
+                    "issuers",
                 )
             else:
                 resp = self.custom_api.list_cluster_custom_object(
-                    CERT_GROUP, CERT_VERSION, "issuers",
+                    CERT_GROUP,
+                    CERT_VERSION,
+                    "issuers",
                 )
             for item in resp.get("items", []):
                 meta = item.get("metadata", {})
                 status = item.get("status", {})
                 ready, message = self._parse_ready_condition(status)
-                results.append({
-                    "name": meta.get("name"),
-                    "namespace": meta.get("namespace"),
-                    "kind": "Issuer",
-                    "ready": ready,
-                    "message": message,
-                })
+                results.append(
+                    {
+                        "name": meta.get("name"),
+                        "namespace": meta.get("namespace"),
+                        "kind": "Issuer",
+                        "ready": ready,
+                        "message": message,
+                    }
+                )
         except Exception as exc:
             logger.error("Failed to list issuers", error=str(exc))
 
         # ClusterIssuers (always cluster-scoped)
         try:
             resp = self.custom_api.list_cluster_custom_object(
-                CERT_GROUP, CERT_VERSION, "clusterissuers",
+                CERT_GROUP,
+                CERT_VERSION,
+                "clusterissuers",
             )
             for item in resp.get("items", []):
                 meta = item.get("metadata", {})
                 status = item.get("status", {})
                 ready, message = self._parse_ready_condition(status)
-                results.append({
-                    "name": meta.get("name"),
-                    "namespace": None,
-                    "kind": "ClusterIssuer",
-                    "ready": ready,
-                    "message": message,
-                })
+                results.append(
+                    {
+                        "name": meta.get("name"),
+                        "namespace": None,
+                        "kind": "ClusterIssuer",
+                        "ready": ready,
+                        "message": message,
+                    }
+                )
         except Exception as exc:
             logger.error("Failed to list cluster issuers", error=str(exc))
 
@@ -204,7 +231,9 @@ class CertMonitor:
         """Check if cert-manager CRDs are available."""
         try:
             self.custom_api.list_cluster_custom_object(
-                CERT_GROUP, CERT_VERSION, "certificates",
+                CERT_GROUP,
+                CERT_VERSION,
+                "certificates",
             )
             return True
         except Exception:

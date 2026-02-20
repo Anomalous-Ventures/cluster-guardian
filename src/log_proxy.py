@@ -28,6 +28,7 @@ log_router = APIRouter(prefix="/api/v1", tags=["Logs"])
 # HELPERS
 # =============================================================================
 
+
 def _build_logql(
     query: Optional[str],
     namespace: Optional[str],
@@ -65,7 +66,9 @@ def _parse_duration_ns(since: str) -> int:
 
     match = pattern.match(since)
     if not match:
-        raise ValueError(f"Invalid duration format: {since!r}. Use e.g. '1h', '30m', '5s'.")
+        raise ValueError(
+            f"Invalid duration format: {since!r}. Use e.g. '1h', '30m', '5s'."
+        )
     value, unit = int(match.group(1)), match.group(2)
     return value * multipliers[unit] * 1_000_000_000
 
@@ -76,13 +79,15 @@ def _parse_loki_streams(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     for stream in data.get("data", {}).get("result", []):
         labels = stream.get("stream", {})
         for ts_ns, line in stream.get("values", []):
-            entries.append({
-                "timestamp": datetime.fromtimestamp(
-                    int(ts_ns) / 1_000_000_000, tz=timezone.utc
-                ).isoformat(),
-                "line": line,
-                "labels": labels,
-            })
+            entries.append(
+                {
+                    "timestamp": datetime.fromtimestamp(
+                        int(ts_ns) / 1_000_000_000, tz=timezone.utc
+                    ).isoformat(),
+                    "line": line,
+                    "labels": labels,
+                }
+            )
     return entries
 
 
@@ -90,13 +95,16 @@ def _parse_loki_streams(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 # LOG ENDPOINTS
 # =============================================================================
 
+
 @log_router.get("/logs")
 async def query_logs(
     query: Optional[str] = Query(None, description="Free-text search pattern"),
     namespace: Optional[str] = Query(None, description="Filter by namespace"),
     pod: Optional[str] = Query(None, description="Filter by pod name"),
     container: Optional[str] = Query(None, description="Filter by container name"),
-    severity: Optional[str] = Query(None, description="Comma-separated severity levels (e.g. error,warning)"),
+    severity: Optional[str] = Query(
+        None, description="Comma-separated severity levels (e.g. error,warning)"
+    ),
     since: str = Query("1h", description="Time range, e.g. '1h', '30m', '5m'"),
     limit: int = Query(100, ge=1, le=5000, description="Max entries to return"),
 ) -> Dict[str, Any]:
@@ -185,6 +193,7 @@ async def get_log_labels() -> Dict[str, List[str]]:
 # K8S EVENTS ENDPOINT
 # =============================================================================
 
+
 @log_router.get("/events")
 async def get_events(
     namespace: Optional[str] = Query(None, description="Filter events by namespace"),
@@ -204,20 +213,24 @@ async def get_events(
         events: List[Dict[str, Any]] = []
         for event in sorted(
             event_list.items,
-            key=lambda e: e.last_timestamp or e.event_time or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda e: (
+                e.last_timestamp
+                or e.event_time
+                or datetime.min.replace(tzinfo=timezone.utc)
+            ),
             reverse=True,
         ):
             involved = event.involved_object
-            events.append({
-                "timestamp": str(
-                    event.last_timestamp or event.event_time or ""
-                ),
-                "type": event.type,
-                "reason": event.reason,
-                "message": event.message,
-                "object": f"{involved.kind}/{involved.name}" if involved else "",
-                "namespace": event.metadata.namespace,
-            })
+            events.append(
+                {
+                    "timestamp": str(event.last_timestamp or event.event_time or ""),
+                    "type": event.type,
+                    "reason": event.reason,
+                    "message": event.message,
+                    "object": f"{involved.kind}/{involved.name}" if involved else "",
+                    "namespace": event.metadata.namespace,
+                }
+            )
 
         return {"events": events}
 

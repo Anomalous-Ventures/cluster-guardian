@@ -52,14 +52,16 @@ class GatusClient:
             successes = sum(1 for r in results_list if r.get("success", False))
             uptime_7d = (successes / total * 100) if total > 0 else 0.0
 
-            results.append({
-                "name": name,
-                "group": group,
-                "healthy": healthy,
-                "hostname": hostname,
-                "last_check": timestamp,
-                "uptime_7d": round(uptime_7d, 2),
-            })
+            results.append(
+                {
+                    "name": name,
+                    "group": group,
+                    "healthy": healthy,
+                    "hostname": hostname,
+                    "last_check": timestamp,
+                    "uptime_7d": round(uptime_7d, 2),
+                }
+            )
 
         return results
 

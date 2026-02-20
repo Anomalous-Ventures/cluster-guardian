@@ -71,7 +71,9 @@ class FalcoAlertProcessor:
 class CrowdSecClient:
     """Async client for CrowdSec Local API (LAPI)."""
 
-    def __init__(self, lapi_url: str = CROWDSEC_DEFAULT_URL, api_key: str | None = None):
+    def __init__(
+        self, lapi_url: str = CROWDSEC_DEFAULT_URL, api_key: str | None = None
+    ):
         self.lapi_url = lapi_url.rstrip("/")
         self.api_key = api_key
 
@@ -148,14 +150,16 @@ class CrowdSecClient:
                 results = []
                 for a in data:
                     source = a.get("source") or {}
-                    results.append({
-                        "id": a.get("id"),
-                        "scenario": a.get("scenario", ""),
-                        "source_ip": source.get("ip", ""),
-                        "source_scope": source.get("scope", ""),
-                        "events_count": a.get("events_count", 0),
-                        "created_at": a.get("created_at", ""),
-                    })
+                    results.append(
+                        {
+                            "id": a.get("id"),
+                            "scenario": a.get("scenario", ""),
+                            "source_ip": source.get("ip", ""),
+                            "source_scope": source.get("scope", ""),
+                            "events_count": a.get("events_count", 0),
+                            "created_at": a.get("created_at", ""),
+                        }
+                    )
                 return results
         except Exception as exc:
             logger.warning("crowdsec_get_alerts_failed", error=str(exc))

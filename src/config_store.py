@@ -8,7 +8,7 @@ before persisting.
 """
 
 import json
-from typing import Any, Dict, List, Optional, get_args, get_origin
+from typing import Any, Dict, Optional, get_args, get_origin
 
 import structlog
 from pydantic.fields import FieldInfo
@@ -119,7 +119,11 @@ class ConfigStore:
                     logger.debug("config.get from redis", key=key, value=value)
                     return value
             except Exception as exc:
-                logger.warning("config.get redis read failed, using default", key=key, error=str(exc))
+                logger.warning(
+                    "config.get redis read failed, using default",
+                    key=key,
+                    error=str(exc),
+                )
 
         default = getattr(settings, key)
         logger.debug("config.get from env default", key=key, value=default)
@@ -156,7 +160,10 @@ class ConfigStore:
                     if key in self._field_info:
                         defaults[key] = self._deserialize(key, raw)
             except Exception as exc:
-                logger.warning("config.get_all redis read failed, returning defaults only", error=str(exc))
+                logger.warning(
+                    "config.get_all redis read failed, returning defaults only",
+                    error=str(exc),
+                )
 
         return defaults
 

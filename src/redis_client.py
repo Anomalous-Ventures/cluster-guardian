@@ -45,7 +45,9 @@ class RedisClient:
             self.available = True
             logger.info("Redis connected", url=self.url)
         except Exception as exc:
-            logger.warning("Redis unavailable, running without persistence", error=str(exc))
+            logger.warning(
+                "Redis unavailable, running without persistence", error=str(exc)
+            )
             self.available = False
             self._redis = None
 

@@ -5,7 +5,7 @@ Prometheus metrics for Cluster Guardian.
 import time
 from typing import Callable
 
-from prometheus_client import Counter, Gauge, Histogram, Info, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram, Info, generate_latest
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -81,6 +81,7 @@ http_request_duration_seconds = Histogram(
 # MIDDLEWARE
 # =============================================================================
 
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     """FastAPI middleware that tracks request count and duration."""
 
@@ -95,7 +96,9 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         duration = time.perf_counter() - start
 
-        http_requests_total.labels(method=method, path=path, status=response.status_code).inc()
+        http_requests_total.labels(
+            method=method, path=path, status=response.status_code
+        ).inc()
         http_request_duration_seconds.labels(method=method, path=path).observe(duration)
 
         return response
@@ -109,6 +112,7 @@ def metrics_middleware(app):
 # =============================================================================
 # RESPONSE HELPER
 # =============================================================================
+
 
 def get_metrics_response() -> Response:
     """Return Prometheus metrics in text exposition format."""

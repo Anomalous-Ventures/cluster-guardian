@@ -68,14 +68,16 @@ class K8sGPTClient:
         issues = []
 
         for result in analysis.get("results", []):
-            issues.append({
-                "kind": result.get("kind", "Unknown"),
-                "name": result.get("name", ""),
-                "namespace": result.get("namespace", "default"),
-                "errors": result.get("error", []),
-                "details": result.get("details", ""),
-                "parent_object": result.get("parentObject", ""),
-            })
+            issues.append(
+                {
+                    "kind": result.get("kind", "Unknown"),
+                    "name": result.get("name", ""),
+                    "namespace": result.get("namespace", "default"),
+                    "errors": result.get("error", []),
+                    "details": result.get("details", ""),
+                    "parent_object": result.get("parentObject", ""),
+                }
+            )
 
         return issues
 

@@ -16,17 +16,30 @@ from typing import Optional
 
 import httpx
 import structlog
-from jinja2 import Template
 
 from .config import settings
 
 logger = structlog.get_logger(__name__)
 
 SEVERITY_MAP = {"low": 1, "medium": 2, "high": 3, "critical": 4}
-SEVERITY_ORDER = {"info": 0, "low": 1, "warning": 2, "medium": 2, "high": 3, "critical": 4}
+SEVERITY_ORDER = {
+    "info": 0,
+    "low": 1,
+    "warning": 2,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
 SLACK_COLORS = {"info": "#36a64f", "warning": "#ff9900", "critical": "#ff0000"}
 DISCORD_COLORS = {"info": 0x36A64F, "warning": 0xFF9900, "critical": 0xFF0000}
-PAGERDUTY_SEVERITY = {"info": "info", "warning": "warning", "critical": "critical", "low": "info", "medium": "warning", "high": "error"}
+PAGERDUTY_SEVERITY = {
+    "info": "info",
+    "warning": "warning",
+    "critical": "critical",
+    "low": "info",
+    "medium": "warning",
+    "high": "error",
+}
 
 
 async def send_slack(message: str, severity: str = "info") -> bool:
@@ -59,7 +72,9 @@ async def send_slack(message: str, severity: str = "info") -> bool:
         return False
 
 
-async def send_email(message: str, severity: str = "info", subject: Optional[str] = None) -> bool:
+async def send_email(
+    message: str, severity: str = "info", subject: Optional[str] = None
+) -> bool:
     """Send notification via SMTP email.
 
     Args:
@@ -70,7 +85,11 @@ async def send_email(message: str, severity: str = "info", subject: Optional[str
     Returns:
         True if sent successfully, False otherwise.
     """
-    if not settings.email_smtp_host or not settings.email_from or not settings.email_recipients:
+    if (
+        not settings.email_smtp_host
+        or not settings.email_from
+        or not settings.email_recipients
+    ):
         logger.debug("email not configured, skipping")
         return False
 
@@ -83,7 +102,7 @@ async def send_email(message: str, severity: str = "info", subject: Optional[str
     msg.attach(MIMEText(message, "plain"))
 
     html_body = f"""<html><body>
-    <h2 style="color: {'#ff0000' if severity == 'critical' else '#ff9900' if severity == 'warning' else '#36a64f'}">
+    <h2 style="color: {"#ff0000" if severity == "critical" else "#ff9900" if severity == "warning" else "#36a64f"}">
         Cluster Guardian [{severity.upper()}]
     </h2>
     <pre>{message}</pre>
@@ -92,13 +111,19 @@ async def send_email(message: str, severity: str = "info", subject: Optional[str
     msg.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(settings.email_smtp_host, settings.email_smtp_port, timeout=10) as server:
+        with smtplib.SMTP(
+            settings.email_smtp_host, settings.email_smtp_port, timeout=10
+        ) as server:
             if settings.email_smtp_tls:
                 server.starttls()
             if settings.email_smtp_user and settings.email_smtp_password:
                 server.login(settings.email_smtp_user, settings.email_smtp_password)
             server.send_message(msg)
-        logger.info("email_notification_sent", severity=severity, recipients=len(settings.email_recipients))
+        logger.info(
+            "email_notification_sent",
+            severity=severity,
+            recipients=len(settings.email_recipients),
+        )
         return True
     except Exception as exc:
         logger.error("email_notification_failed", error=str(exc))
@@ -157,7 +182,9 @@ async def send_teams(message: str, severity: str = "info") -> bool:
         logger.debug("teams_webhook_url not configured, skipping")
         return False
 
-    color = {"info": "good", "warning": "attention", "critical": "attention"}.get(severity, "default")
+    color = {"info": "good", "warning": "attention", "critical": "attention"}.get(
+        severity, "default"
+    )
     payload = {
         "type": "message",
         "attachments": [
@@ -262,7 +289,11 @@ async def send_custom_webhook(message: str, severity: str = "info") -> bool:
         return False
 
     try:
-        headers = json.loads(settings.custom_webhook_headers) if settings.custom_webhook_headers else {}
+        headers = (
+            json.loads(settings.custom_webhook_headers)
+            if settings.custom_webhook_headers
+            else {}
+        )
     except json.JSONDecodeError:
         headers = {}
 
@@ -284,7 +315,11 @@ async def send_custom_webhook(message: str, severity: str = "info") -> bool:
                 headers=headers,
             )
             resp.raise_for_status()
-            logger.info("custom_webhook_sent", severity=severity, url=settings.custom_webhook_url)
+            logger.info(
+                "custom_webhook_sent",
+                severity=severity,
+                url=settings.custom_webhook_url,
+            )
             return True
     except Exception as exc:
         logger.error("custom_webhook_failed", error=str(exc))
