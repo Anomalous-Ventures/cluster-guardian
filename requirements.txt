@@ -36,3 +36,7 @@ qdrant-client>=1.7.0
 
 # Templating (custom webhook payloads)
 Jinja2>=3.1.0
+
+# gRPC (K8sGPT communication)
+grpcio>=1.60.0
+protobuf>=4.25.0
