@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    uses: Anomalous-Ventures/devops/.github/workflows/build-and-push-harbor.yaml@main
+    uses: Anomalous-Ventures/devops/.github/workflows/build-and-push-harbor.yaml@7586ba5c3439562bcc68c3e5be1db6ab2e0f5d3c # main
     with:
       service_name: cluster-guardian
       context: .
