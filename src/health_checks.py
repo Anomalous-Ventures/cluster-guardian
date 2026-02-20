@@ -10,7 +10,7 @@ Goes beyond simple HTTP 200 checks to verify:
 
 import asyncio
 import ssl
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 import httpx
@@ -29,7 +29,7 @@ class HealthCheckResult:
     checks: List[Dict[str, Any]] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -143,7 +143,7 @@ class DeepHealthChecker:
 
             # Parse expiration
             not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-            days_until_expiry = (not_after - datetime.utcnow()).days
+            days_until_expiry = (not_after - datetime.now(timezone.utc)).days
 
             return {
                 "valid": True,

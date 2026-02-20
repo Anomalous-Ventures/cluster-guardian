@@ -20,6 +20,7 @@ logger = structlog.get_logger(__name__)
 KEY_RATE_LIMIT = "guardian:rate_limit"
 KEY_AUDIT_LOG = "guardian:audit_log"
 KEY_LAST_SCAN = "guardian:last_scan"
+KEY_PENDING_APPROVALS = "guardian:pending_approvals"
 
 RATE_LIMIT_TTL = 7200
 AUDIT_LOG_MAX_LEN = 500
@@ -134,6 +135,43 @@ class RedisClient:
         except Exception as exc:
             logger.warning("Redis get_last_scan failed", error=str(exc))
             return None
+
+    async def store_pending_approval(self, approval: dict):
+        """Persist a pending approval entry to Redis."""
+        if not self.available or not self._redis:
+            return
+        try:
+            await self._redis.hset(
+                KEY_PENDING_APPROVALS, approval["id"], json.dumps(approval)
+            )
+        except Exception as exc:
+            logger.warning("Redis store_pending_approval failed", error=str(exc))
+
+    async def update_pending_approval(self, approval_id: str, status: str):
+        """Update the status of a pending approval in Redis."""
+        if not self.available or not self._redis:
+            return
+        try:
+            raw = await self._redis.hget(KEY_PENDING_APPROVALS, approval_id)
+            if raw:
+                entry = json.loads(raw)
+                entry["status"] = status
+                await self._redis.hset(
+                    KEY_PENDING_APPROVALS, approval_id, json.dumps(entry)
+                )
+        except Exception as exc:
+            logger.warning("Redis update_pending_approval failed", error=str(exc))
+
+    async def get_pending_approvals(self) -> list[dict]:
+        """Retrieve all pending approval entries from Redis."""
+        if not self.available or not self._redis:
+            return []
+        try:
+            raw_map = await self._redis.hgetall(KEY_PENDING_APPROVALS)
+            return [json.loads(v) for v in raw_map.values()]
+        except Exception as exc:
+            logger.warning("Redis get_pending_approvals failed", error=str(exc))
+            return []
 
     async def health_check(self) -> bool:
         """Return True if Redis responds to PING."""

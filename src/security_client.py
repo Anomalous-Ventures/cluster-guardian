@@ -5,7 +5,7 @@ Integrates with Falco (runtime security) and CrowdSec (collaborative IDS/IPS)
 to provide security awareness for the Guardian agent.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -45,7 +45,7 @@ class FalcoAlertProcessor:
             "priority": payload.get("priority", ""),
             "severity": _FALCO_SEVERITY_MAP.get(priority_raw, "info"),
             "output": payload.get("output", ""),
-            "timestamp": payload.get("time", datetime.utcnow().isoformat()),
+            "timestamp": payload.get("time", datetime.now(timezone.utc).isoformat()),
             "namespace": output_fields.get("k8s.ns.name", ""),
             "pod": output_fields.get("k8s.pod.name", ""),
             "container": output_fields.get("container.name", ""),

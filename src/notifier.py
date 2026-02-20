@@ -6,6 +6,7 @@ Microsoft Teams, PagerDuty, and custom webhooks.
 All methods are fire-and-forget: errors are logged, never raised.
 """
 
+import asyncio
 import json
 import smtplib
 import socket
@@ -377,24 +378,12 @@ async def send_thehive_alert(
         return None
 
 
-def send_wazuh_syslog(
+def _send_wazuh_syslog_sync(
     action: str,
     result: str,
     metadata: Optional[dict] = None,
 ) -> bool:
-    """Send a structured JSON syslog message to the Wazuh manager.
-
-    Uses TCP to ensure delivery. The JSON payload follows CEF-like
-    conventions that Wazuh decoders can parse.
-
-    Args:
-        action: Action name (e.g. "restart_pod", "create_pr").
-        result: Outcome description.
-        metadata: Extra key-value pairs to include.
-
-    Returns:
-        True if the message was sent, False otherwise.
-    """
+    """Synchronous implementation of Wazuh syslog send (TCP socket)."""
     if not settings.wazuh_syslog_host:
         logger.debug("wazuh_syslog_host not configured, skipping")
         return False
@@ -420,6 +409,41 @@ def send_wazuh_syslog(
     except Exception as exc:
         logger.error("wazuh_syslog_failed", error=str(exc))
         return False
+
+
+def send_wazuh_syslog(
+    action: str,
+    result: str,
+    metadata: Optional[dict] = None,
+) -> bool:
+    """Send a structured JSON syslog message to the Wazuh manager.
+
+    When called from an async context, the blocking socket I/O is
+    offloaded to a thread via ``asyncio.to_thread`` so the event loop
+    is not blocked. When no event loop is running (sync context), the
+    call executes synchronously.
+
+    Args:
+        action: Action name (e.g. "restart_pod", "create_pr").
+        result: Outcome description.
+        metadata: Extra key-value pairs to include.
+
+    Returns:
+        True if the message was sent, False otherwise.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # We're inside an async context -- schedule on a thread
+        loop.create_task(
+            asyncio.to_thread(_send_wazuh_syslog_sync, action, result, metadata)
+        )
+        return True
+
+    return _send_wazuh_syslog_sync(action, result, metadata)
 
 
 async def notify_all(message: str, severity: str = "info") -> dict[str, bool]:

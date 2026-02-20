@@ -10,9 +10,10 @@ The agent can:
 """
 
 from typing import Dict, List, Any, Optional, TypedDict, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import structlog
+import zoneinfo
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -40,8 +41,55 @@ from .cert_monitor import get_cert_monitor
 from .storage_monitor import get_storage_monitor
 from .security_client import get_crowdsec_client
 from .gatus_client import get_gatus_client
+from .config_store import get_config_store
+from .redis_client import get_redis_client
 
 logger = structlog.get_logger(__name__)
+
+
+async def get_effective_setting(key: str) -> Any:
+    """Check Redis overrides first, fall back to static config.
+
+    Gracefully returns the static setting if Redis is unavailable.
+    """
+    try:
+        store = get_config_store()
+        return await store.get(key)
+    except Exception:
+        return getattr(settings, key)
+
+
+def _is_quiet_hours() -> bool:
+    """Return True if the current time falls within the configured quiet hours window.
+
+    Quiet hours are defined by ``settings.quiet_hours_start`` and
+    ``settings.quiet_hours_end`` (HH:MM format) in the timezone given by
+    ``settings.quiet_hours_tz``.  If either start or end is not configured,
+    quiet hours are disabled and this returns False.
+    """
+    if not settings.quiet_hours_start or not settings.quiet_hours_end:
+        return False
+
+    try:
+        tz = zoneinfo.ZoneInfo(settings.quiet_hours_tz)
+    except Exception:
+        logger.warning("Invalid quiet_hours_tz, defaulting to UTC", tz=settings.quiet_hours_tz)
+        tz = timezone.utc
+
+    now = datetime.now(tz)
+    current_time = now.hour * 60 + now.minute
+
+    start_parts = settings.quiet_hours_start.split(":")
+    end_parts = settings.quiet_hours_end.split(":")
+    start_minutes = int(start_parts[0]) * 60 + int(start_parts[1])
+    end_minutes = int(end_parts[0]) * 60 + int(end_parts[1])
+
+    if start_minutes <= end_minutes:
+        # Same-day window, e.g. 22:00-06:00 does NOT apply here
+        return start_minutes <= current_time < end_minutes
+    else:
+        # Overnight window, e.g. 22:00-06:00
+        return current_time >= start_minutes or current_time < end_minutes
 
 
 # =============================================================================
@@ -110,7 +158,7 @@ def create_tools(
         healthy = [r for r in results if r.healthy]
         unhealthy = [r for r in results if not r.healthy]
 
-        lines = [f"Health check completed at {datetime.utcnow().isoformat()}"]
+        lines = [f"Health check completed at {datetime.now(timezone.utc).isoformat()}"]
         lines.append(f"Healthy: {len(healthy)}/{len(results)}")
 
         if unhealthy:
@@ -1016,7 +1064,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow."""
 
-        MAX_ITERATIONS = 10
+        MAX_ITERATIONS = settings.max_agent_iterations
 
         def should_continue(state: GuardianState) -> Literal["tools", "end"]:
             """Determine if we should continue to tools or end."""
@@ -1098,20 +1146,35 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         """
         logger.info("Starting cluster scan", thread_id=thread_id)
 
+        # Check quiet hours -- restrict to observation-only during quiet window
+        quiet = _is_quiet_hours()
+        if quiet:
+            logger.info("Quiet hours active, remediation actions will be deferred")
+
+        scan_instruction = (
+            "Please scan the cluster for issues. "
+            "First check for CrashLoopBackOff pods, then run deep health checks on all services. "
+            "Also check the status page for any services showing unhealthy. "
+            "For any issues found, investigate and take appropriate remediation actions."
+        )
+        if quiet:
+            scan_instruction = (
+                "QUIET HOURS ARE ACTIVE. Only perform observation and diagnosis. "
+                "Do NOT take any remediation actions (no restarts, no scaling, no rollouts). "
+                "Report findings but defer all fixes until quiet hours end. "
+                "Scan the cluster: check CrashLoopBackOff pods, run health checks, "
+                "and check the status page. Document issues found."
+            )
+
         initial_state: GuardianState = {
             "messages": [
-                HumanMessage(
-                    content="Please scan the cluster for issues. "
-                    "First check for CrashLoopBackOff pods, then run deep health checks on all services. "
-                    "Also check the status page for any services showing unhealthy. "
-                    "For any issues found, investigate and take appropriate remediation actions."
-                )
+                HumanMessage(content=scan_instruction)
             ],
             "issues": [],
             "health_results": [],
             "actions_taken": [],
             "pending_approvals": [],
-            "scan_timestamp": datetime.utcnow().isoformat(),
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
             "iteration": 0,
         }
 
@@ -1163,7 +1226,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                 "summary": summary,
                 "audit_log": audit_log,
                 "rate_limit": self.k8s.get_rate_limit_status(),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:
@@ -1172,7 +1235,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             return {
                 "success": False,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
     async def investigate_issue(
@@ -1187,19 +1250,34 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         """
         logger.info("Investigating issue", description=description[:100])
 
+        quiet = _is_quiet_hours()
+        if quiet:
+            logger.info(
+                "Quiet hours active, investigation will be observation-only",
+                description=description[:100],
+            )
+
+        investigate_instruction = (
+            f"Please investigate this issue: {description}\n\n"
+            "Gather relevant information, diagnose the root cause, "
+            "and take appropriate remediation actions if safe to do so."
+        )
+        if quiet:
+            investigate_instruction = (
+                f"QUIET HOURS ARE ACTIVE. Please investigate this issue: {description}\n\n"
+                "Gather relevant information and diagnose the root cause, "
+                "but do NOT take any remediation actions. Report your findings only."
+            )
+
         initial_state: GuardianState = {
             "messages": [
-                HumanMessage(
-                    content=f"Please investigate this issue: {description}\n\n"
-                    "Gather relevant information, diagnose the root cause, "
-                    "and take appropriate remediation actions if safe to do so."
-                )
+                HumanMessage(content=investigate_instruction)
             ],
             "issues": [],
             "health_results": [],
             "actions_taken": [],
             "pending_approvals": [],
-            "scan_timestamp": datetime.utcnow().isoformat(),
+            "scan_timestamp": datetime.now(timezone.utc).isoformat(),
             "iteration": 0,
         }
 
@@ -1239,7 +1317,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                 "success": True,
                 "summary": summary,
                 "audit_log": audit_log,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:
@@ -1248,7 +1326,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             return {
                 "success": False,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
 
