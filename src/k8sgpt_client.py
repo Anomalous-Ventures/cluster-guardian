@@ -1,32 +1,46 @@
 """
-K8sGPT client for cluster analysis.
+K8sGPT gRPC client for cluster analysis.
 
 Integrates with the K8sGPT service to get AI-powered
-analysis of cluster issues.
+analysis of cluster issues via gRPC.
 """
 
 from typing import Dict, List, Any, Optional
-import httpx
+from urllib.parse import urlparse
+
+import grpc
+import grpc.aio
 import structlog
 
 from .config import settings
+from .proto import k8sgpt_pb2, k8sgpt_pb2_grpc
 
 logger = structlog.get_logger(__name__)
 
 
+def _parse_grpc_target(url: str) -> str:
+    """Extract host:port from a URL for gRPC channel creation."""
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 8080
+    return f"{host}:{port}"
+
+
 class K8sGPTClient:
-    """Client for K8sGPT API."""
+    """Client for K8sGPT gRPC API."""
 
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or settings.k8sgpt_url
         self.enabled = settings.k8sgpt_enabled
+        self._target = _parse_grpc_target(self.base_url)
 
     async def analyze(self, filters: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Run K8sGPT analysis on the cluster.
 
         Args:
-            filters: Optional list of analyzers to run (e.g., ["Pod", "Service", "Deployment"])
+            filters: Optional list of analyzers to run
+                     (e.g., ["Pod", "Service", "Deployment"])
 
         Returns:
             Analysis results with issues and explanations
@@ -35,26 +49,44 @@ class K8sGPTClient:
             return {"enabled": False, "results": []}
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                params = {}
-                if filters:
-                    params["filter"] = ",".join(filters)
+            async with grpc.aio.insecure_channel(self._target) as channel:
+                stub = k8sgpt_pb2_grpc.ServerAnalyzerServiceStub(channel)
 
-                response = await client.get(
-                    f"{self.base_url}/v1/analyze",
-                    params=params,
+                request = k8sgpt_pb2.AnalyzeRequest(
+                    explain=False,
                 )
-                response.raise_for_status()
-                data = response.json()
+                if filters:
+                    request.filters.extend(filters)
+
+                response = await stub.Analyze(request, timeout=60.0)
+
+                results = []
+                for result in response.results:
+                    errors = [err.text for err in result.error]
+                    results.append({
+                        "kind": result.kind,
+                        "name": result.name,
+                        "error": errors,
+                        "details": result.details,
+                        "parentObject": result.parent_object,
+                    })
 
                 logger.info(
                     "K8sGPT analysis complete",
-                    result_count=len(data.get("results", [])),
+                    result_count=len(results),
                 )
-                return data
+                return {
+                    "status": response.status,
+                    "problems": response.problems,
+                    "results": results,
+                }
 
-        except httpx.HTTPError as e:
-            logger.error("K8sGPT request failed", error=str(e))
+        except grpc.aio.AioRpcError as e:
+            logger.error(
+                "K8sGPT request failed",
+                error=str(e),
+                code=e.code().name,
+            )
             return {"error": str(e), "results": []}
 
     async def get_issues(self) -> List[Dict[str, Any]]:
@@ -68,16 +100,22 @@ class K8sGPTClient:
         issues = []
 
         for result in analysis.get("results", []):
-            issues.append(
-                {
-                    "kind": result.get("kind", "Unknown"),
-                    "name": result.get("name", ""),
-                    "namespace": result.get("namespace", "default"),
-                    "errors": result.get("error", []),
-                    "details": result.get("details", ""),
-                    "parent_object": result.get("parentObject", ""),
-                }
-            )
+            # k8sgpt encodes namespace in name as "namespace/name"
+            raw_name = result.get("name", "")
+            if "/" in raw_name:
+                namespace, name = raw_name.split("/", 1)
+            else:
+                namespace = "default"
+                name = raw_name
+
+            issues.append({
+                "kind": result.get("kind", "Unknown"),
+                "name": name,
+                "namespace": namespace,
+                "errors": result.get("error", []),
+                "details": result.get("details", ""),
+                "parent_object": result.get("parentObject", ""),
+            })
 
         return issues
 
@@ -103,20 +141,26 @@ class K8sGPTClient:
         return "\n".join(lines)
 
     async def health_check(self) -> bool:
-        """Check if K8sGPT service is healthy."""
+        """Check if K8sGPT service is healthy by checking gRPC channel connectivity."""
         if not self.enabled:
-            return True  # Consider disabled as "healthy"
+            return True
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/healthz")
-                return response.status_code == 200
+            async with grpc.aio.insecure_channel(self._target) as channel:
+                # Use a lightweight Analyze call with no results expected
+                # to verify the service is responsive
+                stub = k8sgpt_pb2_grpc.ServerAnalyzerServiceStub(channel)
+                request = k8sgpt_pb2.AnalyzeRequest(
+                    explain=False,
+                    filters=["Nonexistent"],
+                )
+                await stub.Analyze(request, timeout=5.0)
+                return True
         except Exception as e:
             logger.warning("K8sGPT health check failed", error=str(e))
             return False
 
 
-# Global client instance
 _k8sgpt_client: Optional[K8sGPTClient] = None
 
 
