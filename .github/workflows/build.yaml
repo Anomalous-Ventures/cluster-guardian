@@ -1,0 +1,20 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    uses: Anomalous-Ventures/devops/.github/workflows/build-and-push-harbor.yaml@main
+    with:
+      service_name: cluster-guardian
+      context: .
+      dockerfile: Dockerfile
+      harbor_project: library
+      platforms: linux/amd64,linux/arm64
+      also_push_ghcr: false
+    secrets:
+      HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+      HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+      HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
