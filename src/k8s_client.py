@@ -37,6 +37,7 @@ class ActionRateLimiter:
         """Refresh max_actions from runtime config store if available."""
         try:
             from .config_store import get_config_store
+
             store = get_config_store()
             value = await store.get("max_actions_per_hour")
             if isinstance(value, int) and value > 0:
@@ -609,7 +610,9 @@ class K8sClient:
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "cluster-guardian/restartedAt": datetime.now(timezone.utc).isoformat()
+                                "cluster-guardian/restartedAt": datetime.now(
+                                    timezone.utc
+                                ).isoformat()
                             }
                         }
                     }
@@ -743,7 +746,9 @@ class K8sClient:
                     "template": {
                         "metadata": {
                             "annotations": {
-                                "cluster-guardian/restartedAt": datetime.now(timezone.utc).isoformat()
+                                "cluster-guardian/restartedAt": datetime.now(
+                                    timezone.utc
+                                ).isoformat()
                             }
                         }
                     }

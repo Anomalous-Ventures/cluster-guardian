@@ -1,2 +1,4 @@
+extend-exclude = ["src/proto/*"]
+
 [lint.per-file-ignores]
 "src/proto/*" = ["F401"]

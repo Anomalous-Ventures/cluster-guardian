@@ -63,13 +63,15 @@ class K8sGPTClient:
                 results = []
                 for result in response.results:
                     errors = [err.text for err in result.error]
-                    results.append({
-                        "kind": result.kind,
-                        "name": result.name,
-                        "error": errors,
-                        "details": result.details,
-                        "parentObject": result.parent_object,
-                    })
+                    results.append(
+                        {
+                            "kind": result.kind,
+                            "name": result.name,
+                            "error": errors,
+                            "details": result.details,
+                            "parentObject": result.parent_object,
+                        }
+                    )
 
                 logger.info(
                     "K8sGPT analysis complete",
@@ -108,14 +110,16 @@ class K8sGPTClient:
                 namespace = "default"
                 name = raw_name
 
-            issues.append({
-                "kind": result.get("kind", "Unknown"),
-                "name": name,
-                "namespace": namespace,
-                "errors": result.get("error", []),
-                "details": result.get("details", ""),
-                "parent_object": result.get("parentObject", ""),
-            })
+            issues.append(
+                {
+                    "kind": result.get("kind", "Unknown"),
+                    "name": name,
+                    "namespace": namespace,
+                    "errors": result.get("error", []),
+                    "details": result.get("details", ""),
+                    "parent_object": result.get("parentObject", ""),
+                }
+            )
 
         return issues
 

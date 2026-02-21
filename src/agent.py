@@ -72,7 +72,9 @@ def _is_quiet_hours() -> bool:
     try:
         tz = zoneinfo.ZoneInfo(settings.quiet_hours_tz)
     except Exception:
-        logger.warning("Invalid quiet_hours_tz, defaulting to UTC", tz=settings.quiet_hours_tz)
+        logger.warning(
+            "Invalid quiet_hours_tz, defaulting to UTC", tz=settings.quiet_hours_tz
+        )
         tz = timezone.utc
 
     now = datetime.now(tz)
@@ -1166,9 +1168,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             )
 
         initial_state: GuardianState = {
-            "messages": [
-                HumanMessage(content=scan_instruction)
-            ],
+            "messages": [HumanMessage(content=scan_instruction)],
             "issues": [],
             "health_results": [],
             "actions_taken": [],
@@ -1269,9 +1269,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             )
 
         initial_state: GuardianState = {
-            "messages": [
-                HumanMessage(content=investigate_instruction)
-            ],
+            "messages": [HumanMessage(content=investigate_instruction)],
             "issues": [],
             "health_results": [],
             "actions_taken": [],

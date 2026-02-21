@@ -412,7 +412,8 @@ async def investigate_issue(request: InvestigateRequest):
         raise HTTPException(status_code=503, detail="Guardian not initialized")
 
     thread_id = (
-        request.thread_id or f"investigate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        request.thread_id
+        or f"investigate-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     )
 
     result = await app_state.guardian.investigate_issue(
