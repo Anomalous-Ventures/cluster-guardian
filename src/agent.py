@@ -42,7 +42,6 @@ from .storage_monitor import get_storage_monitor
 from .security_client import get_crowdsec_client
 from .gatus_client import get_gatus_client
 from .config_store import get_config_store
-from .redis_client import get_redis_client
 
 logger = structlog.get_logger(__name__)
 
