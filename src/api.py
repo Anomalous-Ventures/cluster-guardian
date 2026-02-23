@@ -214,17 +214,34 @@ async def lifespan(app: FastAPI):
             "anomaly_suppression_window": settings.anomaly_suppression_window,
             "anomaly_batch_window": settings.anomaly_batch_window,
         }
-        self_tuner = get_self_tuner()
-        loki = get_loki_client()
+        # Wire optional v1.0 components (non-fatal if they fail)
+        self_tuner = None
+        loki = None
         sd = None
-        if settings.service_discovery_enabled:
-            sd = get_service_discovery(
-                k8s=app_state.guardian.k8s,
-                health_checker=app_state.guardian.health_checker,
+        classifier = None
+        try:
+            self_tuner = get_self_tuner()
+        except Exception as exc:
+            logger.warning("Failed to init self_tuner", error=str(exc))
+        try:
+            loki = get_loki_client()
+        except Exception as exc:
+            logger.warning("Failed to init loki client", error=str(exc))
+        try:
+            if settings.service_discovery_enabled:
+                sd = get_service_discovery(
+                    k8s=app_state.guardian.k8s,
+                    health_checker=app_state.guardian.health_checker,
+                )
+        except Exception as exc:
+            logger.warning("Failed to init service discovery", error=str(exc))
+        try:
+            classifier = EscalationClassifier(
+                recurring_threshold=settings.escalation_threshold,
             )
-        classifier = EscalationClassifier(
-            recurring_threshold=settings.escalation_threshold,
-        )
+        except Exception as exc:
+            logger.warning("Failed to init escalation classifier", error=str(exc))
+
         app_state.continuous_monitor = ContinuousMonitor(
             k8s=app_state.guardian.k8s,
             prometheus=app_state.guardian.prometheus,
