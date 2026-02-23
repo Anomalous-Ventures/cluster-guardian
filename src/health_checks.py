@@ -167,14 +167,22 @@ class DeepHealthChecker:
         url: str,
         expected_status: int = 200,
         expected_content: Optional[str] = None,
+        expected_content_patterns: Optional[List[str]] = None,
         timeout: float = 10.0,
     ) -> Dict[str, Any]:
         """Check if an endpoint is reachable and returns expected response."""
+        error_page_indicators = [
+            "502 Bad Gateway",
+            "503 Service Unavailable",
+            "504 Gateway Timeout",
+            "Application Error",
+            "upstream connect error",
+        ]
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                 response = await client.get(url)
 
-                result = {
+                result: Dict[str, Any] = {
                     "url": url,
                     "status_code": response.status_code,
                     "response_time_ms": response.elapsed.total_seconds() * 1000,
@@ -184,6 +192,24 @@ class DeepHealthChecker:
                 if expected_content and expected_content not in response.text:
                     result["success"] = False
                     result["error"] = f"Expected content '{expected_content}' not found"
+
+                # Check for error page indicators in response body
+                body_snippet = response.text[:2000]
+                for indicator in error_page_indicators:
+                    if indicator in body_snippet:
+                        result["success"] = False
+                        result["content_error"] = f"Error page detected: {indicator}"
+                        break
+
+                # Check additional content patterns
+                if expected_content_patterns and result["success"]:
+                    for pattern in expected_content_patterns:
+                        if pattern not in response.text:
+                            result["success"] = False
+                            result["error"] = (
+                                f"Expected content pattern '{pattern}' not found"
+                            )
+                            break
 
                 return result
         except Exception as e:
