@@ -21,9 +21,14 @@ KEY_RATE_LIMIT = "guardian:rate_limit"
 KEY_AUDIT_LOG = "guardian:audit_log"
 KEY_LAST_SCAN = "guardian:last_scan"
 KEY_PENDING_APPROVALS = "guardian:pending_approvals"
+KEY_INCIDENTS = "guardian:incidents"
+KEY_ISSUE_PATTERNS = "guardian:issue_patterns"
+KEY_ESCALATION_PREFIX = "guardian:escalated:"
 
 RATE_LIMIT_TTL = 7200
 AUDIT_LOG_MAX_LEN = 500
+INCIDENTS_TTL = 7200
+ESCALATION_COOLDOWN = 86400
 
 
 class RedisClient:
@@ -172,6 +177,73 @@ class RedisClient:
         except Exception as exc:
             logger.warning("Redis get_pending_approvals failed", error=str(exc))
             return []
+
+    async def store_incidents(self, incidents: list[dict]):
+        """Persist active incidents for recovery across restarts."""
+        if not self.available or not self._redis:
+            return
+        try:
+            await self._redis.set(KEY_INCIDENTS, json.dumps(incidents))
+            await self._redis.expire(KEY_INCIDENTS, INCIDENTS_TTL)
+        except Exception as exc:
+            logger.warning("Redis store_incidents failed", error=str(exc))
+
+    async def get_incidents(self) -> list[dict]:
+        """Retrieve persisted incidents."""
+        if not self.available or not self._redis:
+            return []
+        try:
+            raw = await self._redis.get(KEY_INCIDENTS)
+            if raw:
+                return json.loads(raw)
+            return []
+        except Exception as exc:
+            logger.warning("Redis get_incidents failed", error=str(exc))
+            return []
+
+    async def increment_issue_pattern(self, pattern_key: str) -> int:
+        """Increment the counter for an issue pattern. Returns new count."""
+        if not self.available or not self._redis:
+            return 0
+        try:
+            count = await self._redis.hincrby(KEY_ISSUE_PATTERNS, pattern_key, 1)
+            return count
+        except Exception as exc:
+            logger.warning("Redis increment_issue_pattern failed", error=str(exc))
+            return 0
+
+    async def get_issue_pattern_count(self, pattern_key: str) -> int:
+        """Get the current count for an issue pattern."""
+        if not self.available or not self._redis:
+            return 0
+        try:
+            raw = await self._redis.hget(KEY_ISSUE_PATTERNS, pattern_key)
+            return int(raw) if raw else 0
+        except Exception as exc:
+            logger.warning("Redis get_issue_pattern_count failed", error=str(exc))
+            return 0
+
+    async def record_escalation(self, pattern_key: str):
+        """Mark a pattern as escalated with 24h TTL."""
+        if not self.available or not self._redis:
+            return
+        try:
+            key = f"{KEY_ESCALATION_PREFIX}{pattern_key}"
+            await self._redis.set(key, "1")
+            await self._redis.expire(key, ESCALATION_COOLDOWN)
+        except Exception as exc:
+            logger.warning("Redis record_escalation failed", error=str(exc))
+
+    async def was_recently_escalated(self, pattern_key: str) -> bool:
+        """Check if a pattern was escalated within the 24h cooldown."""
+        if not self.available or not self._redis:
+            return False
+        try:
+            key = f"{KEY_ESCALATION_PREFIX}{pattern_key}"
+            return await self._redis.get(key) is not None
+        except Exception as exc:
+            logger.warning("Redis was_recently_escalated failed", error=str(exc))
+            return False
 
     async def health_check(self) -> bool:
         """Return True if Redis responds to PING."""

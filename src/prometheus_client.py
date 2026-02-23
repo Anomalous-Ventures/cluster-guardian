@@ -272,6 +272,73 @@ class PrometheusClient:
             logger.error("prometheus_get_alerts_failed", error=str(e))
             return [{"error": str(e)}]
 
+    async def get_pvc_usage(self, threshold: float = 0.85) -> list[dict]:
+        """Get PVCs above usage threshold."""
+        query = (
+            "kubelet_volume_stats_used_bytes"
+            " / kubelet_volume_stats_capacity_bytes"
+        )
+        data = await self.query(query)
+        if "error" in data:
+            return [{"error": data["error"]}]
+
+        results = []
+        for item in data.get("result", []):
+            usage = float(item["value"][1])
+            if usage >= threshold:
+                metric = item.get("metric", {})
+                results.append(
+                    {
+                        "namespace": metric.get("namespace", "unknown"),
+                        "pvc": metric.get("persistentvolumeclaim", "unknown"),
+                        "usage_percent": round(usage * 100, 1),
+                    }
+                )
+        return results
+
+    async def get_daemonset_unavailable(self) -> list[dict]:
+        """Get DaemonSets with unavailable pods."""
+        query = "kube_daemonset_status_number_unavailable > 0"
+        data = await self.query(query)
+        if "error" in data:
+            return [{"error": data["error"]}]
+
+        results = []
+        for item in data.get("result", []):
+            metric = item.get("metric", {})
+            results.append(
+                {
+                    "daemonset": metric.get("daemonset", "unknown"),
+                    "namespace": metric.get("namespace", "unknown"),
+                    "unavailable": int(float(item["value"][1])),
+                }
+            )
+        return results
+
+    async def get_ingress_error_rates(self) -> list[dict]:
+        """Get Traefik router-level error rates."""
+        query = (
+            "sum by (service) ("
+            '  rate(traefik_service_requests_total{code=~"5.."}[5m])'
+            ") / sum by (service) ("
+            "  rate(traefik_service_requests_total[5m])"
+            ") > 0.01"
+        )
+        data = await self.query(query)
+        if "error" in data:
+            return [{"error": data["error"]}]
+
+        results = []
+        for item in data.get("result", []):
+            metric = item.get("metric", {})
+            results.append(
+                {
+                    "service": metric.get("service", "unknown"),
+                    "error_rate": round(float(item["value"][1]) * 100, 2),
+                }
+            )
+        return results
+
     async def health_check(self) -> bool:
         """Check Prometheus reachability."""
         try:

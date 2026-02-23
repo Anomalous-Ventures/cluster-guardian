@@ -153,6 +153,7 @@ class K8sClient:
         self.batch_v1 = client.BatchV1Api()
         self.autoscaling_v2 = client.AutoscalingV2Api()
         self.policy_v1 = client.PolicyV1Api()
+        self.custom_objects = client.CustomObjectsApi()
         self._redis_client = get_redis_client()
         self.rate_limiter = ActionRateLimiter(
             settings.max_actions_per_hour, redis_client=self._redis_client
@@ -502,6 +503,165 @@ class K8sClient:
         except ApiException as e:
             logger.error("Failed to list PDBs", namespace=namespace, error=str(e))
         return pdbs
+
+    async def list_ingress_routes(
+        self, namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List Traefik IngressRoute CRDs via CustomObjects API."""
+        try:
+            if namespace:
+                resp = self.custom_objects.list_namespaced_custom_object(
+                    group="traefik.io",
+                    version="v1alpha1",
+                    namespace=namespace,
+                    plural="ingressroutes",
+                )
+            else:
+                resp = self.custom_objects.list_cluster_custom_object(
+                    group="traefik.io",
+                    version="v1alpha1",
+                    plural="ingressroutes",
+                )
+            return [
+                {
+                    "name": item["metadata"]["name"],
+                    "namespace": item["metadata"]["namespace"],
+                    "spec": item.get("spec", {}),
+                }
+                for item in resp.get("items", [])
+            ]
+        except ApiException as e:
+            logger.error("Failed to list IngressRoutes", error=str(e))
+            return []
+
+    async def get_ingress_route(
+        self, namespace: str, name: str
+    ) -> Dict[str, Any]:
+        """Get a specific Traefik IngressRoute."""
+        try:
+            return self.custom_objects.get_namespaced_custom_object(
+                group="traefik.io",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="ingressroutes",
+                name=name,
+            )
+        except ApiException as e:
+            logger.error(
+                "Failed to get IngressRoute",
+                namespace=namespace,
+                name=name,
+                error=str(e),
+            )
+            return {"error": str(e)}
+
+    async def list_services(
+        self, namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List Services with endpoint readiness info."""
+        try:
+            if namespace:
+                svc_list = self.core_v1.list_namespaced_service(namespace)
+            else:
+                svc_list = self.core_v1.list_service_for_all_namespaces()
+
+            results = []
+            for svc in svc_list.items:
+                results.append(
+                    {
+                        "name": svc.metadata.name,
+                        "namespace": svc.metadata.namespace,
+                        "type": svc.spec.type,
+                        "cluster_ip": svc.spec.cluster_ip,
+                        "ports": [
+                            {"port": p.port, "protocol": p.protocol}
+                            for p in (svc.spec.ports or [])
+                        ],
+                    }
+                )
+            return results
+        except ApiException as e:
+            logger.error("Failed to list services", error=str(e))
+            return []
+
+    async def get_service_endpoints(
+        self, namespace: str, service_name: str
+    ) -> Dict[str, Any]:
+        """Get endpoint addresses for a Service."""
+        try:
+            endpoints = self.core_v1.read_namespaced_endpoints(
+                service_name, namespace
+            )
+            ready = []
+            not_ready = []
+            for subset in endpoints.subsets or []:
+                for addr in subset.addresses or []:
+                    ready.append(addr.ip)
+                for addr in subset.not_ready_addresses or []:
+                    not_ready.append(addr.ip)
+            return {
+                "service": service_name,
+                "namespace": namespace,
+                "ready_addresses": ready,
+                "not_ready_addresses": not_ready,
+                "total_ready": len(ready),
+                "total_not_ready": len(not_ready),
+            }
+        except ApiException as e:
+            logger.error(
+                "Failed to get service endpoints",
+                namespace=namespace,
+                service=service_name,
+                error=str(e),
+            )
+            return {"error": str(e)}
+
+    async def list_daemonsets(
+        self, namespace: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List DaemonSets with desired vs ready status."""
+        try:
+            if namespace:
+                ds_list = self.apps_v1.list_namespaced_daemon_set(namespace)
+            else:
+                ds_list = self.apps_v1.list_daemon_set_for_all_namespaces()
+
+            results = []
+            for ds in ds_list.items:
+                status = ds.status
+                results.append(
+                    {
+                        "name": ds.metadata.name,
+                        "namespace": ds.metadata.namespace,
+                        "desired": status.desired_number_scheduled or 0,
+                        "current": status.current_number_scheduled or 0,
+                        "ready": status.number_ready or 0,
+                        "unavailable": status.number_unavailable or 0,
+                    }
+                )
+            return results
+        except ApiException as e:
+            logger.error("Failed to list DaemonSets", error=str(e))
+            return []
+
+    async def watch_events(self, callback) -> None:
+        """Stream K8s events and call callback for Warning/Error types.
+
+        This is a blocking coroutine intended to be run as an asyncio task.
+        """
+        from kubernetes import watch
+
+        w = watch.Watch()
+        try:
+            for event in w.stream(
+                self.core_v1.list_event_for_all_namespaces,
+                timeout_seconds=300,
+            ):
+                obj = event.get("object")
+                if obj and obj.type in ("Warning", "Error"):
+                    await callback(event)
+        finally:
+            w.stop()
 
     # =========================================================================
     # WRITE OPERATIONS (rate limited, audit logged)

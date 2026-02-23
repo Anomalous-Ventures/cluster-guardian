@@ -153,6 +153,22 @@ class Settings(BaseSettings):
     # Gatus Status Page
     gatus_url: str = "http://gatus.status.svc.cluster.local:80"
 
+    # Incident Correlation
+    correlation_window_seconds: int = 300
+    correlation_debounce_seconds: int = 30
+    correlation_expiry_seconds: int = 3600
+
+    # Continuous Monitor
+    fast_loop_interval_seconds: int = 30
+    event_watch_enabled: bool = True
+    anomaly_suppression_window: int = 300
+    anomaly_batch_window: int = 10
+
+    # AI Dev Controller
+    dev_controller_url: str = "http://ai-dev-controller.llm.svc.cluster.local:8096"
+    dev_controller_enabled: bool = True
+    escalation_threshold: int = 3
+
     class Config:
         env_prefix = "CLUSTER_GUARDIAN_"
 

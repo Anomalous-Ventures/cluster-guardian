@@ -46,7 +46,10 @@ from .redis_client import get_redis_client
 from .memory import get_memory
 from .security_client import get_falco_processor
 from .config_store import get_config_store
+from .incident_correlator import get_correlator
 from .log_proxy import log_router
+from .ingress_monitor import get_ingress_monitor
+from .dev_controller_client import get_dev_controller
 
 logger = structlog.get_logger(__name__)
 
@@ -147,6 +150,7 @@ class AppState:
     def __init__(self):
         self.guardian: Optional[ClusterGuardian] = None
         self.scan_task: Optional[asyncio.Task] = None
+        self.continuous_monitor = None
         self.last_scan_result: Optional[Dict[str, Any]] = None
         self.websocket_connections: List[WebSocket] = []
         self.pending_approvals: List[Dict[str, Any]] = []
@@ -196,10 +200,38 @@ async def lifespan(app: FastAPI):
     # Start periodic scan task
     app_state.scan_task = asyncio.create_task(periodic_scan_loop())
 
+    # Start continuous monitor
+    try:
+        from .continuous_monitor import ContinuousMonitor
+
+        cm_config = {
+            "fast_loop_interval_seconds": settings.fast_loop_interval_seconds,
+            "event_watch_enabled": settings.event_watch_enabled,
+            "anomaly_suppression_window": settings.anomaly_suppression_window,
+            "anomaly_batch_window": settings.anomaly_batch_window,
+        }
+        app_state.continuous_monitor = ContinuousMonitor(
+            k8s=app_state.guardian.k8s,
+            prometheus=app_state.guardian.prometheus,
+            health_checker=app_state.guardian.health_checker,
+            ingress_monitor=get_ingress_monitor(),
+            config=cm_config,
+        )
+        app_state.continuous_monitor.set_callbacks(
+            investigate=app_state.guardian.investigate_issue,
+            broadcast=broadcast_update,
+        )
+        await app_state.continuous_monitor.start()
+        logger.info("ContinuousMonitor started")
+    except Exception as exc:
+        logger.warning("Failed to start ContinuousMonitor", error=str(exc))
+
     yield
 
     # Shutdown
     logger.info("Shutting down Cluster Guardian")
+    if app_state.continuous_monitor:
+        await app_state.continuous_monitor.stop()
     if app_state.scan_task:
         app_state.scan_task.cancel()
     await get_redis_client().close()
@@ -283,6 +315,9 @@ def create_app() -> FastAPI:
     app.include_router(config_router)
     app.include_router(connections_router)
     app.include_router(approvals_router)
+    app.include_router(incidents_router)
+    app.include_router(monitor_router)
+    app.include_router(escalations_router)
     app.include_router(log_router)
 
     # Static file mount for frontend SPA
@@ -528,26 +563,17 @@ async def alertmanager_webhook(
     if not app_state.guardian:
         raise HTTPException(status_code=503, detail="Guardian not initialized")
 
-    # Build description from alerts
-    alert_descriptions = []
+    # Correlate alerts into incidents with debounced investigation
+    correlator = get_correlator()
+    correlator.set_investigation_callback(app_state.guardian.investigate_issue)
+
+    incidents = []
     for alert in payload.alerts:
-        labels = alert.get("labels", {})
-        annotations = alert.get("annotations", {})
-        alert_descriptions.append(
-            f"Alert: {labels.get('alertname', 'Unknown')}\n"
-            f"Severity: {labels.get('severity', 'unknown')}\n"
-            f"Namespace: {labels.get('namespace', 'unknown')}\n"
-            f"Description: {annotations.get('description', 'No description')}"
-        )
+        incident = correlator.correlate(alert)
+        incidents.append(incident)
+        asyncio.ensure_future(correlator.schedule_investigation(incident))
 
-    description = "\n\n".join(alert_descriptions)
-
-    # Run investigation in background
-    background_tasks.add_task(
-        app_state.guardian.investigate_issue,
-        description=f"AlertManager firing alerts:\n{description}",
-        thread_id=f"alert-{payload.groupKey[:20]}",
-    )
+    correlator.expire_old()
 
     await broadcast_update(
         {
@@ -563,6 +589,7 @@ async def alertmanager_webhook(
     return {
         "status": "accepted",
         "alerts_received": len(payload.alerts),
+        "incidents": len({i.id for i in incidents}),
         "investigation_started": True,
     }
 
@@ -812,6 +839,24 @@ async def get_connections() -> Dict[str, Any]:
             ConnectionStatus(name="thehive", status="disconnected", last_checked=now)
         )
 
+    # AI Dev Controller
+    if settings.dev_controller_enabled:
+        try:
+            dc = get_dev_controller()
+            dc_healthy = await dc.health_check()
+            status = "connected" if dc_healthy else "disconnected"
+        except Exception:
+            status = "error"
+        results.append(
+            ConnectionStatus(name="dev_controller", status=status, last_checked=now)
+        )
+    else:
+        results.append(
+            ConnectionStatus(
+                name="dev_controller", status="disconnected", last_checked=now
+            )
+        )
+
     # GitHub (optional)
     if settings.github_token:
         import httpx
@@ -973,6 +1018,76 @@ async def reject_action(approval_id: str) -> Dict[str, str]:
             return {"status": "rejected", "id": approval_id}
 
     raise HTTPException(status_code=404, detail=f"Approval {approval_id} not found")
+
+
+# =============================================================================
+# INCIDENTS ROUTES
+# =============================================================================
+
+incidents_router = APIRouter(prefix="/api/v1", tags=["Incidents"])
+
+
+@incidents_router.get("/incidents")
+async def list_incidents() -> Dict[str, Any]:
+    """List active and recent incidents."""
+    correlator = get_correlator()
+    return {
+        "incidents": correlator.to_dict_list(),
+        "count": len(correlator.get_active_incidents()),
+    }
+
+
+@incidents_router.get("/incidents/{incident_id}")
+async def get_incident(incident_id: str) -> Dict[str, Any]:
+    """Get detail for a specific incident with correlated alerts."""
+    correlator = get_correlator()
+    incident = correlator.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+    return incident.to_dict()
+
+
+# =============================================================================
+# MONITOR ROUTES
+# =============================================================================
+
+monitor_router = APIRouter(prefix="/api/v1", tags=["Monitor"])
+
+
+@monitor_router.get("/monitor/status")
+async def monitor_status() -> Dict[str, Any]:
+    """Get continuous monitor health, last check times, and anomaly queue depth."""
+    if not app_state.continuous_monitor:
+        return {"running": False, "error": "Continuous monitor not initialized"}
+    return app_state.continuous_monitor.get_status()
+
+
+@monitor_router.get("/monitor/anomalies")
+async def monitor_anomalies() -> Dict[str, Any]:
+    """Get recent anomalies with suppression state."""
+    if not app_state.continuous_monitor:
+        return {"anomalies": [], "error": "Continuous monitor not initialized"}
+    return {"anomalies": app_state.continuous_monitor.get_recent_anomalies()}
+
+
+# =============================================================================
+# ESCALATIONS ROUTES
+# =============================================================================
+
+escalations_router = APIRouter(prefix="/api/v1", tags=["Escalations"])
+
+
+@escalations_router.get("/escalations")
+async def list_escalations() -> Dict[str, Any]:
+    """List goals submitted to the AI dev controller."""
+    if not settings.dev_controller_enabled:
+        return {"escalations": [], "dev_controller_enabled": False}
+    try:
+        dc = get_dev_controller()
+        status = await dc.get_loop_status()
+        return {"dev_loop_status": status}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 # =============================================================================

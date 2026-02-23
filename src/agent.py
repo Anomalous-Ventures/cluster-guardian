@@ -42,6 +42,9 @@ from .storage_monitor import get_storage_monitor
 from .security_client import get_crowdsec_client
 from .gatus_client import get_gatus_client
 from .config_store import get_config_store
+from .ingress_monitor import get_ingress_monitor
+from .dev_controller_client import get_dev_controller
+from .self_tuner import get_self_tuner
 
 logger = structlog.get_logger(__name__)
 
@@ -125,6 +128,9 @@ def create_tools(
     storage_monitor=None,
     crowdsec=None,
     gatus=None,
+    ingress_monitor=None,
+    dev_controller=None,
+    self_tuner=None,
 ):
     """Create tools for the Guardian agent."""
 
@@ -870,6 +876,138 @@ def create_tools(
                 lines.append(f"- {s['group']}/{s['name']}: uptime_7d={s['uptime_7d']}%")
         return "\n".join(lines)
 
+    @tool
+    async def match_playbook(
+        alertname: str, namespace: str = "", pod: str = "", node: str = ""
+    ) -> str:
+        """Match an alert to a remediation playbook.
+        Returns structured steps if a playbook matches, or a message if none found.
+        Always check for a matching playbook before starting ad-hoc investigation."""
+        from .playbooks import get_playbook_executor
+
+        executor = get_playbook_executor()
+        data = {
+            "alertname": alertname,
+            "namespace": namespace,
+            "pod": pod,
+            "node": node,
+            "labels": {
+                "alertname": alertname,
+                "namespace": namespace,
+                "pod": pod,
+                "node": node,
+            },
+        }
+        result = executor.render_for_agent(data)
+        if result:
+            return result
+        return f"No playbook matched for alertname={alertname}. Proceed with ad-hoc investigation."
+
+    # ----- v0.9.0 - Ingress / Infrastructure Tools -----
+
+    @tool
+    async def check_ingress_routes() -> str:
+        """List all Traefik IngressRoutes with health status.
+        Checks backend service endpoints and HTTP reachability."""
+        if not ingress_monitor:
+            return "Ingress monitor not available."
+        results = await ingress_monitor.check_all_ingress_routes()
+        if not results:
+            return "No IngressRoutes found."
+        healthy = [r for r in results if r.get("healthy")]
+        unhealthy = [r for r in results if not r.get("healthy")]
+        lines = [f"IngressRoutes: {len(healthy)} healthy, {len(unhealthy)} unhealthy"]
+        for r in unhealthy:
+            lines.append(f"- {r['namespace']}/{r['name']}: {r.get('error', 'unhealthy')}")
+        return "\n".join(lines)
+
+    @tool
+    async def check_ingress_route(namespace: str, name: str) -> str:
+        """Deep check a specific Traefik IngressRoute including backend endpoints and HTTP status.
+
+        Args:
+            namespace: Kubernetes namespace
+            name: Name of the IngressRoute
+        """
+        if not ingress_monitor:
+            return "Ingress monitor not available."
+        result = await ingress_monitor.check_ingress_route(namespace, name)
+        return json.dumps(result, indent=2, default=str)
+
+    @tool
+    async def check_service_endpoints(namespace: str, service: str) -> str:
+        """Verify a Service has healthy endpoints with ready/not-ready counts.
+
+        Args:
+            namespace: Kubernetes namespace
+            service: Service name
+        """
+        if not ingress_monitor:
+            return "Ingress monitor not available."
+        result = await ingress_monitor.check_service_endpoints(namespace, service)
+        return json.dumps(result, indent=2, default=str)
+
+    @tool
+    async def check_daemonset_health() -> str:
+        """Check all DaemonSets have desired==ready pods.
+        Returns any DaemonSets with unavailable pods."""
+        if not ingress_monitor:
+            return "Ingress monitor not available."
+        ds_list = await ingress_monitor.check_daemonset_health()
+        if not ds_list:
+            return "No DaemonSets found (outside protected namespaces)."
+        unhealthy = [ds for ds in ds_list if ds.get("unavailable", 0) > 0]
+        if not unhealthy:
+            return f"All {len(ds_list)} DaemonSets healthy."
+        lines = [f"DaemonSets with issues ({len(unhealthy)}):"]
+        for ds in unhealthy:
+            lines.append(
+                f"- {ds['namespace']}/{ds['name']}: "
+                f"desired={ds['desired']} ready={ds['ready']} unavailable={ds['unavailable']}"
+            )
+        return "\n".join(lines)
+
+    @tool
+    async def check_pvc_usage() -> str:
+        """Check PVC volume usage. Reports PVCs above 85% capacity."""
+        if not ingress_monitor:
+            return "Ingress monitor not available."
+        pvcs = await ingress_monitor.check_pvc_usage()
+        if not pvcs:
+            return "No PVCs above 85% usage threshold."
+        lines = [f"PVCs with high usage ({len(pvcs)}):"]
+        for pvc in pvcs:
+            lines.append(f"- {pvc['namespace']}/{pvc['pvc']}: {pvc['usage_percent']}%")
+        return "\n".join(lines)
+
+    # ----- v0.9.0 - Dev Controller Escalation -----
+
+    @tool
+    async def escalate_to_dev_controller(
+        description: str, acceptance_criteria: str
+    ) -> str:
+        """Escalate a complex issue to the AI Dev Controller for long-term resolution.
+        Use this when:
+        - An issue requires code or infrastructure changes (not just restarts)
+        - A recurring issue needs a permanent fix
+        - Resource limits need adjustment in Pulumi/Helm configs
+        - New monitoring rules or playbooks are needed
+
+        Args:
+            description: What needs to be fixed and why
+            acceptance_criteria: Comma-separated list of success criteria
+        """
+        if not dev_controller:
+            return "Dev controller client not available."
+        criteria_list = [c.strip() for c in acceptance_criteria.split(",")]
+        result = await dev_controller.submit_goal(
+            description=description,
+            acceptance_criteria=criteria_list,
+        )
+        if "error" in result:
+            return f"Failed to escalate: {result['error']}"
+        return f"Goal submitted to dev controller: {json.dumps(result, default=str)}"
+
     return [
         analyze_cluster,
         check_all_services,
@@ -921,6 +1059,16 @@ def create_tools(
         get_crowdsec_alerts,
         # v0.7.0 - Status Page
         check_status_page,
+        # v0.8.0 - Playbooks
+        match_playbook,
+        # v0.9.0 - Ingress / Infrastructure
+        check_ingress_routes,
+        check_ingress_route,
+        check_service_endpoints,
+        check_daemonset_health,
+        check_pvc_usage,
+        # v0.9.0 - Dev Controller Escalation
+        escalate_to_dev_controller,
     ]
 
 
@@ -985,6 +1133,25 @@ Status Page Monitoring:
 - You can check the Gatus status page for real-time service uptime monitoring
 - Use the status page to identify services that are down or degraded
 
+Remediation Playbooks:
+- ALWAYS use match_playbook first when investigating an alert to check for a structured remediation plan
+- If a playbook matches, follow its steps in order rather than improvising
+- If no playbook matches, proceed with ad-hoc investigation as before
+- Playbooks provide consistent, auditable remediation for common failure patterns
+
+Ingress & Infrastructure Monitoring:
+- You can list and deep-check Traefik IngressRoutes for backend health and HTTP reachability
+- You can verify Service endpoints have ready addresses
+- You can check DaemonSet health across the cluster (desired vs ready pods)
+- You can check PVC volume usage and detect volumes approaching capacity
+
+AI Dev Controller Integration:
+- For issues that require code changes, resource limit adjustments, or infrastructure config updates,
+  use escalate_to_dev_controller to hand off to the AI Dev Controller
+- The SRE agent handles QUICK FIXES only: restarts, rollbacks, scaling, job cleanup
+- Long-term fixes (memory limit changes, new configs, playbook additions) go to dev controller
+- Track escalated issues - don't re-escalate the same problem within 24h
+
 When you find issues:
 1. First recall similar past issues to guide your diagnosis
 2. Understand what's wrong (check events, pod status, node status, Prometheus metrics, Loki logs)
@@ -1019,6 +1186,13 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             lapi_url=settings.crowdsec_lapi_url, api_key=settings.crowdsec_api_key
         )
         self.gatus = get_gatus_client()
+        self.ingress_monitor = get_ingress_monitor(
+            k8s=self.k8s, prometheus=self.prometheus
+        )
+        self.dev_controller = (
+            get_dev_controller() if settings.dev_controller_enabled else None
+        )
+        self.self_tuner = get_self_tuner()
 
         # Create LLM
         self.llm = ChatOpenAI(
@@ -1054,6 +1228,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             storage_monitor=self.storage_monitor,
             crowdsec=self.crowdsec,
             gatus=self.gatus,
+            ingress_monitor=self.ingress_monitor,
+            dev_controller=self.dev_controller,
+            self_tuner=self.self_tuner,
         )
 
         # Bind tools to LLM
