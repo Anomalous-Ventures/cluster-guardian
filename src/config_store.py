@@ -42,16 +42,17 @@ class ConfigStore:
         if info is None:
             return None
         annotation = info.annotation
-        # Unwrap Optional[X] -> X
         origin = get_origin(annotation)
         if origin is type(None):
             return None
+        # Concrete generic like list[str] -> list
+        if origin in (list, dict, set, frozenset, tuple):
+            return origin
         if origin is not None:
-            # e.g. Optional[str] is Union[str, None]
+            # Unwrap Optional[X] / Union[X, None] -> X
             args = get_args(annotation)
             non_none = [a for a in args if a is not type(None)]
             if non_none:
-                # For List[str] the origin is list
                 inner_origin = get_origin(non_none[0])
                 return inner_origin if inner_origin is not None else non_none[0]
         return annotation
