@@ -232,11 +232,19 @@ class IngressMonitor:
                         content_error = f"Error page detected: {indicator}"
                         break
 
+                # Suspicious small response body on 200
+                suspicious_small_body = (
+                    resp.status_code == 200 and len(resp.content) < 100
+                )
+
                 return {
                     "status_code": resp.status_code,
                     "response_time_ms": resp.elapsed.total_seconds() * 1000,
-                    "success": resp.status_code < 500 and content_error is None,
+                    "success": resp.status_code < 500
+                    and content_error is None
+                    and not suspicious_small_body,
                     "content_error": content_error,
+                    "suspicious_small_body": suspicious_small_body,
                 }
         except Exception as exc:
             return {"success": False, "error": str(exc)}

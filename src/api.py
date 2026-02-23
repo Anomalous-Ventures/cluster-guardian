@@ -50,6 +50,10 @@ from .incident_correlator import get_correlator
 from .log_proxy import log_router
 from .ingress_monitor import get_ingress_monitor
 from .dev_controller_client import get_dev_controller
+from .self_tuner import get_self_tuner
+from .loki_client import get_loki_client
+from .service_discovery import get_service_discovery
+from .escalation_classifier import EscalationClassifier
 
 logger = structlog.get_logger(__name__)
 
@@ -210,12 +214,27 @@ async def lifespan(app: FastAPI):
             "anomaly_suppression_window": settings.anomaly_suppression_window,
             "anomaly_batch_window": settings.anomaly_batch_window,
         }
+        self_tuner = get_self_tuner()
+        loki = get_loki_client()
+        sd = None
+        if settings.service_discovery_enabled:
+            sd = get_service_discovery(
+                k8s=app_state.guardian.k8s,
+                health_checker=app_state.guardian.health_checker,
+            )
+        classifier = EscalationClassifier(
+            recurring_threshold=settings.escalation_threshold,
+        )
         app_state.continuous_monitor = ContinuousMonitor(
             k8s=app_state.guardian.k8s,
             prometheus=app_state.guardian.prometheus,
             health_checker=app_state.guardian.health_checker,
             ingress_monitor=get_ingress_monitor(),
             config=cm_config,
+            self_tuner=self_tuner,
+            loki=loki,
+            service_discovery=sd,
+            escalation_classifier=classifier,
         )
         app_state.continuous_monitor.set_callbacks(
             investigate=app_state.guardian.investigate_issue,
@@ -318,6 +337,8 @@ def create_app() -> FastAPI:
     app.include_router(incidents_router)
     app.include_router(monitor_router)
     app.include_router(escalations_router)
+    app.include_router(discovery_router)
+    app.include_router(tuner_router)
     app.include_router(log_router)
 
     # Static file mount for frontend SPA
@@ -1088,6 +1109,47 @@ async def list_escalations() -> Dict[str, Any]:
         return {"dev_loop_status": status}
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# =============================================================================
+# SERVICE DISCOVERY ROUTES
+# =============================================================================
+
+discovery_router = APIRouter(prefix="/api/v1", tags=["ServiceDiscovery"])
+
+
+@discovery_router.get("/services/discovered")
+async def discovered_services() -> Dict[str, Any]:
+    """List dynamically discovered services from IngressRoute CRDs."""
+    if not settings.service_discovery_enabled:
+        return {"services": [], "enabled": False}
+    try:
+        sd = get_service_discovery()
+        return {"services": sd.get_discovered(), "enabled": True}
+    except Exception as exc:
+        return {"services": [], "error": str(exc)}
+
+
+# =============================================================================
+# SELF-TUNER ROUTES
+# =============================================================================
+
+tuner_router = APIRouter(prefix="/api/v1", tags=["SelfTuner"])
+
+
+@tuner_router.get("/self-tuner/suggestions")
+async def self_tuner_suggestions() -> Dict[str, Any]:
+    """Get improvement suggestions from the self-tuner."""
+    try:
+        tuner = get_self_tuner()
+        suggestions = await tuner.suggest_improvements()
+        return {
+            "suggestions": suggestions,
+            "stats": tuner.get_stats(),
+            "effectiveness": tuner.get_effectiveness_stats(),
+        }
+    except Exception as exc:
+        return {"suggestions": [], "error": str(exc)}
 
 
 # =============================================================================

@@ -163,3 +163,58 @@ class TestTuneIntervals:
         mock_store.set.assert_awaited_once()
         new_val = mock_store.set.call_args[0][1]
         assert new_val < 30
+
+
+class TestSuggestImprovements:
+    @pytest.mark.asyncio
+    async def test_no_suggestions_on_clean_state(self, tuner):
+        suggestions = await tuner.suggest_improvements()
+        assert suggestions == []
+
+    @pytest.mark.asyncio
+    async def test_suggests_playbook_for_recurring(self, tuner):
+        tuner._issue_counts["ns/pod/oom"] = 5
+        tuner._escalation_threshold = 3
+        suggestions = await tuner.suggest_improvements()
+        assert any(s["type"] == "new_playbook" for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_suggests_monitoring_for_noisy_namespace(self, tuner):
+        for i in range(5):
+            tuner._issue_counts[f"media/pod-{i}/crash"] = 1
+        suggestions = await tuner.suggest_improvements()
+        assert any(s["type"] == "enhanced_monitoring" for s in suggestions)
+
+    @pytest.mark.asyncio
+    async def test_suggests_tuning_for_false_positives(self, tuner):
+        tuner._effectiveness["check_a"] = {"true_positive": 2, "false_positive": 4}
+        suggestions = await tuner.suggest_improvements()
+        assert any(s["type"] == "tune_threshold" for s in suggestions)
+
+
+class TestTrackCheckEffectiveness:
+    def test_track_true_positive(self, tuner):
+        tuner.track_check_effectiveness("check_a", True)
+        assert tuner._effectiveness["check_a"]["true_positive"] == 1
+
+    def test_track_false_positive(self, tuner):
+        tuner.track_check_effectiveness("check_b", False)
+        assert tuner._effectiveness["check_b"]["false_positive"] == 1
+
+    def test_increments(self, tuner):
+        tuner.track_check_effectiveness("check_c", True)
+        tuner.track_check_effectiveness("check_c", True)
+        tuner.track_check_effectiveness("check_c", False)
+        assert tuner._effectiveness["check_c"]["true_positive"] == 2
+        assert tuner._effectiveness["check_c"]["false_positive"] == 1
+
+
+class TestGetEffectivenessStats:
+    def test_empty(self, tuner):
+        stats = tuner.get_effectiveness_stats()
+        assert stats == {}
+
+    def test_with_data(self, tuner):
+        tuner.track_check_effectiveness("check_a", True)
+        stats = tuner.get_effectiveness_stats()
+        assert "check_a" in stats

@@ -169,6 +169,17 @@ class Settings(BaseSettings):
     dev_controller_enabled: bool = True
     escalation_threshold: int = 3
 
+    # Log Anomaly Detection
+    log_anomaly_min_count: int = 10
+    log_anomaly_window: str = "5m"
+
+    # Dynamic Service Discovery
+    service_discovery_enabled: bool = True
+    service_discovery_interval_loops: int = 10
+
+    # Auto-escalation for recurring issues
+    auto_escalate_recurring: bool = True
+
     class Config:
         env_prefix = "CLUSTER_GUARDIAN_"
 
