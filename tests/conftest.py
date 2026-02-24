@@ -99,6 +99,7 @@ def _reset_singletons():
         ("src.ingress_monitor", "_ingress_monitor"),
         ("src.dev_controller_client", "_dev_controller"),
         ("src.self_tuner", "_self_tuner"),
+        ("src.incident_correlator", "_correlator"),
     ]
 
     # Also try agent but don't fail if it can't import

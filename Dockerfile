@@ -1,11 +1,14 @@
 # Cluster Guardian - Agentic AI for Kubernetes Self-Healing
 # Multi-stage build for smaller image
 
+# Registry prefix for base images (override with Harbor proxy on self-hosted runners)
+ARG REGISTRY_PREFIX=docker.io/
+
 # =============================================================================
 # Frontend Build Stage
 # =============================================================================
 
-FROM node:20-alpine AS frontend-builder
+FROM ${REGISTRY_PREFIX}node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
@@ -18,7 +21,7 @@ RUN npm run build
 # Python Builder Stage
 # =============================================================================
 
-FROM python:3.11-slim AS builder
+FROM ${REGISTRY_PREFIX}python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -35,7 +38,7 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 # Runtime Stage
 # =============================================================================
 
-FROM python:3.11-slim
+FROM ${REGISTRY_PREFIX}python:3.11-slim
 
 WORKDIR /app
 
