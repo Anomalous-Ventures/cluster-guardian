@@ -28,9 +28,7 @@ class SelfTuner:
         self._issue_counts: dict[str, int] = {}
         self._escalation_threshold = getattr(settings, "escalation_threshold", 3)
 
-    async def record_issue(
-        self, pattern_key: str, resolution: str, success: bool
-    ):
+    async def record_issue(self, pattern_key: str, resolution: str, success: bool):
         """Record an issue occurrence and its resolution outcome."""
         self._issue_counts[pattern_key] = self._issue_counts.get(pattern_key, 0) + 1
 
@@ -154,9 +152,7 @@ class SelfTuner:
         except Exception as exc:
             logger.debug("tune_intervals failed", error=str(exc))
 
-    def derive_pattern_key(
-        self, namespace: str, resource: str, issue_type: str
-    ) -> str:
+    def derive_pattern_key(self, namespace: str, resource: str, issue_type: str) -> str:
         """Create a stable key for deduplicating recurring issues."""
         return f"{namespace}/{resource}/{issue_type}"
 

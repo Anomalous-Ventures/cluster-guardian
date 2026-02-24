@@ -534,9 +534,7 @@ class K8sClient:
             logger.error("Failed to list IngressRoutes", error=str(e))
             return []
 
-    async def get_ingress_route(
-        self, namespace: str, name: str
-    ) -> Dict[str, Any]:
+    async def get_ingress_route(self, namespace: str, name: str) -> Dict[str, Any]:
         """Get a specific Traefik IngressRoute."""
         try:
             return self.custom_objects.get_namespaced_custom_object(
@@ -589,9 +587,7 @@ class K8sClient:
     ) -> Dict[str, Any]:
         """Get endpoint addresses for a Service."""
         try:
-            endpoints = self.core_v1.read_namespaced_endpoints(
-                service_name, namespace
-            )
+            endpoints = self.core_v1.read_namespaced_endpoints(service_name, namespace)
             ready = []
             not_ready = []
             for subset in endpoints.subsets or []:

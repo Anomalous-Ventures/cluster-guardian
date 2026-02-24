@@ -80,9 +80,7 @@ class TestGetLoopStatus:
 
     @pytest.mark.asyncio
     async def test_error(self, client):
-        fake = _FakeHTTPClient(
-            get=AsyncMock(side_effect=Exception("timeout"))
-        )
+        fake = _FakeHTTPClient(get=AsyncMock(side_effect=Exception("timeout")))
 
         with patch.object(client, "_client", return_value=fake):
             result = await client.get_loop_status()

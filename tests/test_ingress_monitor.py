@@ -124,7 +124,10 @@ class TestCheckPvcUsage:
             return_value={
                 "result": [
                     {
-                        "metric": {"namespace": "default", "persistentvolumeclaim": "data-pvc"},
+                        "metric": {
+                            "namespace": "default",
+                            "persistentvolumeclaim": "data-pvc",
+                        },
                         "value": [1234567890, "0.50"],
                     }
                 ]
@@ -139,7 +142,10 @@ class TestCheckPvcUsage:
             return_value={
                 "result": [
                     {
-                        "metric": {"namespace": "media", "persistentvolumeclaim": "plex-data"},
+                        "metric": {
+                            "namespace": "media",
+                            "persistentvolumeclaim": "plex-data",
+                        },
                         "value": [1234567890, "0.92"],
                     }
                 ]

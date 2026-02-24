@@ -53,7 +53,9 @@ class TestRecordIssue:
         mock_dev_controller.submit_goal.assert_awaited()
 
     @pytest.mark.asyncio
-    async def test_no_escalation_on_failure(self, tuner, mock_redis, mock_dev_controller):
+    async def test_no_escalation_on_failure(
+        self, tuner, mock_redis, mock_dev_controller
+    ):
         tuner._escalation_threshold = 3
         for i in range(3):
             await tuner.record_issue("ns/pod/type", "failed", False)

@@ -274,10 +274,7 @@ class PrometheusClient:
 
     async def get_pvc_usage(self, threshold: float = 0.85) -> list[dict]:
         """Get PVCs above usage threshold."""
-        query = (
-            "kubelet_volume_stats_used_bytes"
-            " / kubelet_volume_stats_capacity_bytes"
-        )
+        query = "kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes"
         data = await self.query(query)
         if "error" in data:
             return [{"error": data["error"]}]

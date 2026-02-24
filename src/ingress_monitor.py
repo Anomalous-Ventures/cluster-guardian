@@ -37,9 +37,7 @@ class IngressMonitor:
             logger.error("check_all_ingress_routes failed", error=str(exc))
         return results
 
-    async def check_ingress_route(
-        self, namespace: str, name: str
-    ) -> dict[str, Any]:
+    async def check_ingress_route(self, namespace: str, name: str) -> dict[str, Any]:
         """Deep check a specific IngressRoute."""
         result: dict[str, Any] = {
             "name": name,
@@ -83,7 +81,9 @@ class IngressMonitor:
                 tls = spec.get("tls", {})
                 scheme = "https" if tls else "http"
                 http_check = await self._http_check(f"{scheme}://{host}/")
-                result["checks"].append({"type": "http_check", "host": host, **http_check})
+                result["checks"].append(
+                    {"type": "http_check", "host": host, **http_check}
+                )
                 if not http_check.get("success"):
                     result["healthy"] = False
                     result["status_code"] = http_check.get("status_code")
@@ -145,8 +145,7 @@ class IngressMonitor:
             return []
         try:
             query = (
-                "kubelet_volume_stats_used_bytes"
-                " / kubelet_volume_stats_capacity_bytes"
+                "kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes"
             )
             data = await self._prometheus.query(query)
             if "error" in data:
@@ -160,9 +159,7 @@ class IngressMonitor:
                     results.append(
                         {
                             "namespace": metric.get("namespace", "unknown"),
-                            "pvc": metric.get(
-                                "persistentvolumeclaim", "unknown"
-                            ),
+                            "pvc": metric.get("persistentvolumeclaim", "unknown"),
                             "usage_percent": round(usage * 100, 1),
                         }
                     )

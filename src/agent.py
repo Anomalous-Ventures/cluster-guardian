@@ -918,7 +918,9 @@ def create_tools(
         unhealthy = [r for r in results if not r.get("healthy")]
         lines = [f"IngressRoutes: {len(healthy)} healthy, {len(unhealthy)} unhealthy"]
         for r in unhealthy:
-            lines.append(f"- {r['namespace']}/{r['name']}: {r.get('error', 'unhealthy')}")
+            lines.append(
+                f"- {r['namespace']}/{r['name']}: {r.get('error', 'unhealthy')}"
+            )
         return "\n".join(lines)
 
     @tool

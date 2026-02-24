@@ -59,9 +59,9 @@ class ContinuousMonitor:
         self._investigate_callback: Optional[
             Callable[..., Coroutine[Any, Any, Any]]
         ] = None
-        self._broadcast_callback: Optional[
-            Callable[..., Coroutine[Any, Any, Any]]
-        ] = None
+        self._broadcast_callback: Optional[Callable[..., Coroutine[Any, Any, Any]]] = (
+            None
+        )
 
         self._running = False
         self._tasks: list[asyncio.Task] = []
@@ -132,9 +132,7 @@ class ContinuousMonitor:
 
                 for result in signals:
                     if isinstance(result, BaseException):
-                        logger.warning(
-                            "fast_loop check raised", error=str(result)
-                        )
+                        logger.warning("fast_loop check raised", error=str(result))
                         continue
                     if isinstance(result, list):
                         for sig in result:
