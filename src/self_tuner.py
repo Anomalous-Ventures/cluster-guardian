@@ -26,6 +26,7 @@ class SelfTuner:
         self._redis = redis
         self._dev_controller = dev_controller
         self._issue_counts: dict[str, int] = {}
+        self._effectiveness: dict[str, dict[str, int]] = {}
         self._escalation_threshold = getattr(settings, "escalation_threshold", 3)
 
     async def record_issue(self, pattern_key: str, resolution: str, success: bool):
@@ -151,6 +152,79 @@ class SelfTuner:
                 )
         except Exception as exc:
             logger.debug("tune_intervals failed", error=str(exc))
+
+    async def suggest_improvements(self) -> list[dict[str, Any]]:
+        """Analyze accumulated issue patterns and suggest improvements.
+
+        Returns list of suggestion dicts with type, description, and priority.
+        """
+        suggestions: list[dict[str, Any]] = []
+
+        # Find recurring patterns that haven't been escalated
+        for pattern_key, count in self._issue_counts.items():
+            if count >= self._escalation_threshold:
+                suggestions.append({
+                    "type": "new_playbook",
+                    "description": f"Create playbook for recurring issue: {pattern_key} ({count} occurrences)",
+                    "pattern_key": pattern_key,
+                    "occurrences": count,
+                    "priority": "high" if count >= self._escalation_threshold * 2 else "medium",
+                })
+
+        # Check for patterns that suggest missing health checks
+        namespaces_with_issues = set()
+        for pattern_key in self._issue_counts:
+            parts = pattern_key.split("/")
+            if len(parts) >= 1:
+                namespaces_with_issues.add(parts[0])
+
+        for ns in namespaces_with_issues:
+            ns_total = sum(
+                c for k, c in self._issue_counts.items() if k.startswith(f"{ns}/")
+            )
+            if ns_total >= 5:
+                suggestions.append({
+                    "type": "enhanced_monitoring",
+                    "description": f"Namespace '{ns}' has {ns_total} total issues - consider adding dedicated health checks",
+                    "namespace": ns,
+                    "total_issues": ns_total,
+                    "priority": "medium",
+                })
+
+        # Detect high false positive rates
+        for pattern_key, stats in self._effectiveness.items():
+            total = stats.get("true_positive", 0) + stats.get("false_positive", 0)
+            if total >= 5 and stats.get("false_positive", 0) / total > 0.5:
+                suggestions.append({
+                    "type": "tune_threshold",
+                    "description": f"Check '{pattern_key}' has >50% false positive rate - tune sensitivity",
+                    "pattern_key": pattern_key,
+                    "false_positive_rate": round(stats["false_positive"] / total, 2),
+                    "priority": "high",
+                })
+
+        return suggestions
+
+    def track_check_effectiveness(
+        self, check_key: str, true_positive: bool
+    ):
+        """Track whether a check result was a true or false positive.
+
+        Args:
+            check_key: Identifier for the check type
+            true_positive: Whether the detected issue was a real problem
+        """
+        if check_key not in self._effectiveness:
+            self._effectiveness[check_key] = {"true_positive": 0, "false_positive": 0}
+
+        if true_positive:
+            self._effectiveness[check_key]["true_positive"] += 1
+        else:
+            self._effectiveness[check_key]["false_positive"] += 1
+
+    def get_effectiveness_stats(self) -> dict[str, Any]:
+        """Return effectiveness tracking stats."""
+        return dict(self._effectiveness)
 
     def derive_pattern_key(self, namespace: str, resource: str, issue_type: str) -> str:
         """Create a stable key for deduplicating recurring issues."""

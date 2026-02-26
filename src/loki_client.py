@@ -200,6 +200,44 @@ class LokiClient:
             "pods": pods,
         }
 
+    async def query_instant(self, logql: str) -> dict:
+        """Execute an instant LogQL query against /loki/api/v1/query.
+
+        Returns the raw Loki response data dict.
+        """
+        params = {"query": logql}
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.get(
+                    f"{self.base_url}/loki/api/v1/query",
+                    params=params,
+                )
+                response.raise_for_status()
+                return response.json().get("data", {})
+        except Exception as exc:
+            logger.warning("Loki instant query failed", query=logql, error=str(exc))
+            return {}
+
+    async def get_cluster_error_summary(
+        self, since: str = "5m", min_count: int = 10
+    ) -> list[dict]:
+        """Get aggregated error counts per namespace using a LogQL metric query.
+
+        Returns list of dicts with namespace, count for namespaces exceeding min_count.
+        """
+        query = (
+            f'sum by (namespace) (count_over_time({{job=~".+"}} '
+            f'|~ "(?i)(error|exception|fatal|panic|crash)" [{since}]))'
+        )
+        data = await self.query_instant(query)
+        results = []
+        for item in data.get("result", []):
+            ns = item.get("metric", {}).get("namespace", "unknown")
+            count = int(float(item.get("value", [0, 0])[1]))
+            if count >= min_count:
+                results.append({"namespace": ns, "count": count})
+        return sorted(results, key=lambda x: x["count"], reverse=True)
+
     async def health_check(self) -> bool:
         """Check Loki reachability via /ready endpoint."""
         try:

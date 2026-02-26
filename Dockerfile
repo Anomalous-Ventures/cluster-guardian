@@ -27,7 +27,7 @@ WORKDIR /build
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    gcc g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

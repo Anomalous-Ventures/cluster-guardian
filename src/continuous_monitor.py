@@ -42,12 +42,20 @@ class ContinuousMonitor:
         health_checker,
         ingress_monitor,
         config,
+        self_tuner=None,
+        loki=None,
+        service_discovery=None,
+        escalation_classifier=None,
     ):
         self._k8s = k8s
         self._prometheus = prometheus
         self._health_checker = health_checker
         self._ingress_monitor = ingress_monitor
         self._config = config
+        self._self_tuner = self_tuner
+        self._loki = loki
+        self._service_discovery = service_discovery
+        self._escalation_classifier = escalation_classifier
 
         self._anomaly_queue: asyncio.Queue[AnomalySignal] = asyncio.Queue()
         self._seen_keys: dict[str, float] = {}
@@ -127,6 +135,9 @@ class ContinuousMonitor:
                     self._check_daemonset_health(),
                     self._check_pvc_usage(),
                     self._check_gatus(),
+                    self._check_log_anomalies(),
+                    self._check_node_conditions(),
+                    self._check_deployment_rollouts(),
                     return_exceptions=True,
                 )
 
@@ -137,6 +148,22 @@ class ContinuousMonitor:
                     if isinstance(result, list):
                         for sig in result:
                             await self._anomaly_queue.put(sig)
+
+                # Self-tuner: adjust intervals based on cluster stability
+                if self._self_tuner:
+                    try:
+                        await self._self_tuner.tune_intervals()
+                    except Exception as exc:
+                        logger.debug("self_tuner.tune_intervals failed", error=str(exc))
+
+                # Service discovery: refresh periodically
+                if self._service_discovery:
+                    try:
+                        interval_loops = settings.service_discovery_interval_loops
+                        if self._service_discovery.should_refresh(interval_loops):
+                            await self._service_discovery.refresh()
+                    except Exception as exc:
+                        logger.debug("service_discovery refresh failed", error=str(exc))
 
             except asyncio.CancelledError:
                 break
@@ -269,60 +296,171 @@ class ContinuousMonitor:
             logger.debug("gatus check skipped", error=str(exc))
             return []
 
+    async def _check_log_anomalies(self) -> list[AnomalySignal]:
+        """Check Loki for cluster-wide error log spikes."""
+        if not self._loki:
+            return []
+        try:
+            window = settings.log_anomaly_window
+            min_count = settings.log_anomaly_min_count
+            summaries = await self._loki.get_cluster_error_summary(
+                since=window, min_count=min_count
+            )
+            return [
+                AnomalySignal(
+                    source="loki_errors",
+                    severity="warning" if s["count"] < min_count * 5 else "critical",
+                    title=f"Log error spike: {s['namespace']}",
+                    details=f"{s['count']} errors in last {window}",
+                    namespace=s["namespace"],
+                    resource="logs",
+                    dedupe_key=f"loki_errors:{s['namespace']}",
+                )
+                for s in summaries
+            ]
+        except Exception as exc:
+            logger.debug("log anomaly check failed", error=str(exc))
+            return []
+
+    async def _check_node_conditions(self) -> list[AnomalySignal]:
+        """Check all nodes for unhealthy conditions."""
+        signals = []
+        try:
+            nodes = await asyncio.to_thread(self._k8s.core_v1.list_node)
+            for node in nodes.items:
+                name = node.metadata.name
+                for condition in node.status.conditions or []:
+                    # Ready=False is bad; pressure conditions True is bad
+                    if condition.type == "Ready" and condition.status != "True":
+                        signals.append(AnomalySignal(
+                            source="node_condition",
+                            severity="critical",
+                            title=f"Node not ready: {name}",
+                            details=f"Ready={condition.status}: {condition.message or ''}",
+                            namespace="cluster",
+                            resource=name,
+                            dedupe_key=f"node:not_ready:{name}",
+                        ))
+                    elif condition.type in ("MemoryPressure", "DiskPressure", "PIDPressure"):
+                        if condition.status == "True":
+                            signals.append(AnomalySignal(
+                                source="node_condition",
+                                severity="warning",
+                                title=f"Node {condition.type}: {name}",
+                                details=condition.message or "",
+                                namespace="cluster",
+                                resource=name,
+                                dedupe_key=f"node:{condition.type.lower()}:{name}",
+                            ))
+        except Exception as exc:
+            logger.debug("node condition check failed", error=str(exc))
+        return signals
+
+    async def _check_deployment_rollouts(self) -> list[AnomalySignal]:
+        """Detect deployments where available < desired or Progressing=False."""
+        signals = []
+        try:
+            deployments = await asyncio.to_thread(self._k8s.apps_v1.list_deployment_for_all_namespaces)
+            for dep in deployments.items:
+                ns = dep.metadata.namespace
+                if ns in settings.protected_namespaces:
+                    continue
+                name = dep.metadata.name
+                spec_replicas = dep.spec.replicas or 1
+                available = dep.status.available_replicas or 0
+                if available < spec_replicas:
+                    signals.append(AnomalySignal(
+                        source="deployment_rollout",
+                        severity="warning",
+                        title=f"Deployment degraded: {ns}/{name}",
+                        details=f"available={available} desired={spec_replicas}",
+                        namespace=ns,
+                        resource=name,
+                        dedupe_key=f"deployment:{ns}/{name}",
+                    ))
+
+                # Check Progressing condition
+                for condition in dep.status.conditions or []:
+                    if condition.type == "Progressing" and condition.status == "False":
+                        signals.append(AnomalySignal(
+                            source="deployment_rollout",
+                            severity="critical",
+                            title=f"Deployment rollout stalled: {ns}/{name}",
+                            details=condition.message or "Progressing=False",
+                            namespace=ns,
+                            resource=name,
+                            dedupe_key=f"deployment_stalled:{ns}/{name}",
+                        ))
+        except Exception as exc:
+            logger.debug("deployment rollout check failed", error=str(exc))
+        return signals
+
     # ------------------------------------------------------------------
     # Event watcher
     # ------------------------------------------------------------------
 
     async def _event_watcher(self):
-        """K8s watch API stream for Warning/Error events."""
+        """K8s watch API stream for Warning/Error events.
+
+        The kubernetes watch API is synchronous and blocks the calling
+        thread.  We run it inside ``asyncio.to_thread`` so the event
+        loop stays free to serve health probes and other coroutines.
+        """
         from kubernetes import watch
 
         while self._running:
             try:
-                w = watch.Watch()
-                self._last_event_watch = time.time()
-                for event in w.stream(
-                    self._k8s.core_v1.list_event_for_all_namespaces,
-                    timeout_seconds=300,
-                ):
-                    if not self._running:
-                        w.stop()
-                        break
-
-                    obj = event.get("object")
-                    if obj is None:
-                        continue
-
-                    if obj.type not in ("Warning", "Error"):
-                        continue
-
-                    ns = obj.metadata.namespace or "cluster"
-                    if ns in settings.protected_namespaces:
-                        continue
-
-                    involved = ""
-                    if obj.involved_object:
-                        involved = (
-                            f"{obj.involved_object.kind}/{obj.involved_object.name}"
-                        )
-
-                    signal = AnomalySignal(
-                        source="k8s_events",
-                        severity="warning" if obj.type == "Warning" else "critical",
-                        title=f"K8s event: {obj.reason}",
-                        details=obj.message or "",
-                        namespace=ns,
-                        resource=involved,
-                        dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
-                    )
+                signals = await asyncio.to_thread(self._sync_watch_events, watch)
+                for signal in signals:
                     await self._anomaly_queue.put(signal)
-                    self._last_event_watch = time.time()
-
+                self._last_event_watch = time.time()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.warning("event_watcher reconnecting", error=str(exc))
                 await asyncio.sleep(5)
+
+    def _sync_watch_events(self, watch_mod) -> list[AnomalySignal]:
+        """Blocking helper that streams K8s events and returns signals."""
+        signals: list[AnomalySignal] = []
+        w = watch_mod.Watch()
+        self._last_event_watch = time.time()
+        for event in w.stream(
+            self._k8s.core_v1.list_event_for_all_namespaces,
+            timeout_seconds=300,
+        ):
+            if not self._running:
+                w.stop()
+                break
+
+            obj = event.get("object")
+            if obj is None:
+                continue
+
+            if obj.type not in ("Warning", "Error"):
+                continue
+
+            ns = obj.metadata.namespace or "cluster"
+            if ns in settings.protected_namespaces:
+                continue
+
+            involved = ""
+            if obj.involved_object:
+                involved = (
+                    f"{obj.involved_object.kind}/{obj.involved_object.name}"
+                )
+
+            signals.append(AnomalySignal(
+                source="k8s_events",
+                severity="warning" if obj.type == "Warning" else "critical",
+                title=f"K8s event: {obj.reason}",
+                details=obj.message or "",
+                namespace=ns,
+                resource=involved,
+                dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
+            ))
+
+        return signals
 
     # ------------------------------------------------------------------
     # Anomaly dispatcher
@@ -373,6 +511,16 @@ class ContinuousMonitor:
         if not batch:
             return
 
+        # Record issues in self-tuner
+        if self._self_tuner:
+            for sig in batch:
+                try:
+                    await self._self_tuner.record_issue(
+                        sig.dedupe_key, f"auto-detected:{sig.source}", True
+                    )
+                except Exception:
+                    pass
+
         # Group by namespace/resource
         groups: dict[str, list[AnomalySignal]] = {}
         for sig in batch:
@@ -380,6 +528,24 @@ class ContinuousMonitor:
             groups.setdefault(key, []).append(sig)
 
         for group_key, signals in groups.items():
+            # Classify escalation level
+            escalation_level = None
+            if self._escalation_classifier:
+                for sig in signals:
+                    issue_counts = (
+                        self._self_tuner._issue_counts if self._self_tuner else None
+                    )
+                    level = self._escalation_classifier.classify(
+                        source=sig.source,
+                        severity=sig.severity,
+                        title=sig.title,
+                        details=sig.details,
+                        dedupe_key=sig.dedupe_key,
+                        issue_counts=issue_counts,
+                    )
+                    if escalation_level is None or level.value > escalation_level.value:
+                        escalation_level = level
+
             # Build investigation description
             lines = [f"Continuous monitor detected anomalies for {group_key}:"]
             highest_severity = "info"
@@ -389,6 +555,9 @@ class ContinuousMonitor:
                     highest_severity = "critical"
                 elif sig.severity == "warning" and highest_severity != "critical":
                     highest_severity = "warning"
+
+            if escalation_level:
+                lines.append(f"\nEscalation classification: {escalation_level.value}")
 
             description = "\n".join(lines)
 
@@ -401,6 +570,7 @@ class ContinuousMonitor:
                             "data": {
                                 "group": group_key,
                                 "severity": highest_severity,
+                                "escalation": escalation_level.value if escalation_level else None,
                                 "signals": [
                                     {
                                         "source": s.source,
@@ -416,6 +586,24 @@ class ContinuousMonitor:
                     )
                 except Exception:
                     pass
+
+            # Auto-escalate LONG_TERM issues to dev controller
+            if escalation_level and escalation_level.value == "long_term":
+                if self._self_tuner and self._self_tuner._dev_controller:
+                    try:
+                        await self._self_tuner.auto_escalate(
+                            group_key, description
+                        )
+                        logger.info(
+                            "Auto-escalated long-term issue",
+                            group=group_key,
+                        )
+                        continue  # Skip LLM investigation for auto-escalated
+                    except Exception as exc:
+                        logger.warning(
+                            "Auto-escalation failed, falling back to LLM",
+                            error=str(exc),
+                        )
 
             # Trigger investigation
             if self._investigate_callback:
@@ -439,7 +627,7 @@ class ContinuousMonitor:
 
     def get_status(self) -> dict[str, Any]:
         """Return monitor health and stats."""
-        return {
+        status = {
             "running": self._running,
             "fast_loop_interval": self._fast_loop_interval,
             "last_fast_loop": self._last_fast_loop,
@@ -449,7 +637,25 @@ class ContinuousMonitor:
             "suppressed_anomalies": self._suppressed_anomalies,
             "suppression_window": self._suppression_window,
             "tracked_dedupe_keys": len(self._seen_keys),
+            "checks": [
+                "crashloop_pods",
+                "prometheus_alerts",
+                "ingress_health",
+                "daemonset_health",
+                "pvc_usage",
+                "gatus",
+                "log_anomalies",
+                "node_conditions",
+                "deployment_rollouts",
+            ],
         }
+        if self._service_discovery:
+            status["discovered_services"] = len(
+                self._service_discovery.get_discovered()
+            )
+        if self._escalation_classifier:
+            status["escalation_classifier"] = self._escalation_classifier.get_stats()
+        return status
 
     def get_recent_anomalies(self) -> list[dict[str, Any]]:
         """Return currently tracked dedupe keys with timestamps."""

@@ -23,6 +23,7 @@ def mock_k8s():
     k8s = MagicMock()
     k8s.get_crashloopbackoff_pods = AsyncMock(return_value=[])
     k8s.core_v1 = MagicMock()
+    k8s.apps_v1 = MagicMock()
     return k8s
 
 
@@ -43,6 +44,23 @@ def mock_ingress():
 
 
 @pytest.fixture
+def mock_self_tuner():
+    tuner = MagicMock()
+    tuner.record_issue = AsyncMock()
+    tuner.tune_intervals = AsyncMock()
+    tuner._issue_counts = {}
+    tuner._dev_controller = None
+    return tuner
+
+
+@pytest.fixture
+def mock_loki():
+    loki = MagicMock()
+    loki.get_cluster_error_summary = AsyncMock(return_value=[])
+    return loki
+
+
+@pytest.fixture
 def monitor(cm_config, mock_k8s, mock_prometheus, mock_ingress, settings_env):
     return ContinuousMonitor(
         k8s=mock_k8s,
@@ -50,6 +68,21 @@ def monitor(cm_config, mock_k8s, mock_prometheus, mock_ingress, settings_env):
         health_checker=MagicMock(),
         ingress_monitor=mock_ingress,
         config=cm_config,
+    )
+
+
+@pytest.fixture
+def monitor_full(
+    cm_config, mock_k8s, mock_prometheus, mock_ingress, mock_self_tuner, mock_loki, settings_env
+):
+    return ContinuousMonitor(
+        k8s=mock_k8s,
+        prometheus=mock_prometheus,
+        health_checker=MagicMock(),
+        ingress_monitor=mock_ingress,
+        config=cm_config,
+        self_tuner=mock_self_tuner,
+        loki=mock_loki,
     )
 
 
@@ -196,3 +229,201 @@ class TestSetCallbacks:
         monitor.set_callbacks(investigate=investigate, broadcast=broadcast)
         assert monitor._investigate_callback is investigate
         assert monitor._broadcast_callback is broadcast
+
+
+class TestCheckLogAnomalies:
+    @pytest.mark.asyncio
+    async def test_no_loki(self, monitor):
+        result = await monitor._check_log_anomalies()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_no_errors(self, monitor_full, mock_loki):
+        mock_loki.get_cluster_error_summary = AsyncMock(return_value=[])
+        result = await monitor_full._check_log_anomalies()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_error_spike_detected(self, monitor_full, mock_loki):
+        mock_loki.get_cluster_error_summary = AsyncMock(
+            return_value=[{"namespace": "media", "count": 25}]
+        )
+        result = await monitor_full._check_log_anomalies()
+        assert len(result) == 1
+        assert result[0].source == "loki_errors"
+        assert "media" in result[0].title
+
+    @pytest.mark.asyncio
+    async def test_critical_on_high_count(self, monitor_full, mock_loki):
+        mock_loki.get_cluster_error_summary = AsyncMock(
+            return_value=[{"namespace": "apps", "count": 100}]
+        )
+        result = await monitor_full._check_log_anomalies()
+        assert len(result) == 1
+        assert result[0].severity == "critical"
+
+
+class TestCheckNodeConditions:
+    @pytest.mark.asyncio
+    async def test_healthy_nodes(self, monitor, mock_k8s):
+        node = MagicMock()
+        node.metadata.name = "worker-1"
+        condition = MagicMock()
+        condition.type = "Ready"
+        condition.status = "True"
+        condition.message = "kubelet is posting ready"
+        node.status.conditions = [condition]
+
+        node_list = MagicMock()
+        node_list.items = [node]
+        mock_k8s.core_v1.list_node.return_value = node_list
+
+        result = await monitor._check_node_conditions()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_not_ready_node(self, monitor, mock_k8s):
+        node = MagicMock()
+        node.metadata.name = "worker-2"
+        condition = MagicMock()
+        condition.type = "Ready"
+        condition.status = "False"
+        condition.message = "kubelet stopped posting"
+        node.status.conditions = [condition]
+
+        node_list = MagicMock()
+        node_list.items = [node]
+        mock_k8s.core_v1.list_node.return_value = node_list
+
+        result = await monitor._check_node_conditions()
+        assert len(result) == 1
+        assert result[0].severity == "critical"
+        assert "worker-2" in result[0].title
+
+    @pytest.mark.asyncio
+    async def test_memory_pressure(self, monitor, mock_k8s):
+        node = MagicMock()
+        node.metadata.name = "worker-3"
+        ready = MagicMock()
+        ready.type = "Ready"
+        ready.status = "True"
+        pressure = MagicMock()
+        pressure.type = "MemoryPressure"
+        pressure.status = "True"
+        pressure.message = "memory low"
+        node.status.conditions = [ready, pressure]
+
+        node_list = MagicMock()
+        node_list.items = [node]
+        mock_k8s.core_v1.list_node.return_value = node_list
+
+        result = await monitor._check_node_conditions()
+        assert len(result) == 1
+        assert result[0].source == "node_condition"
+        assert "MemoryPressure" in result[0].title
+
+    @pytest.mark.asyncio
+    async def test_error_handling(self, monitor, mock_k8s):
+        mock_k8s.core_v1.list_node.side_effect = Exception("api error")
+        result = await monitor._check_node_conditions()
+        assert result == []
+
+
+class TestCheckDeploymentRollouts:
+    @pytest.mark.asyncio
+    async def test_healthy_deployment(self, monitor, mock_k8s):
+        dep = MagicMock()
+        dep.metadata.name = "web"
+        dep.metadata.namespace = "default"
+        dep.spec.replicas = 3
+        dep.status.available_replicas = 3
+        dep.status.conditions = []
+
+        dep_list = MagicMock()
+        dep_list.items = [dep]
+        mock_k8s.apps_v1.list_deployment_for_all_namespaces.return_value = dep_list
+
+        result = await monitor._check_deployment_rollouts()
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_degraded_deployment(self, monitor, mock_k8s):
+        dep = MagicMock()
+        dep.metadata.name = "api"
+        dep.metadata.namespace = "default"
+        dep.spec.replicas = 3
+        dep.status.available_replicas = 1
+        dep.status.conditions = []
+
+        dep_list = MagicMock()
+        dep_list.items = [dep]
+        mock_k8s.apps_v1.list_deployment_for_all_namespaces.return_value = dep_list
+
+        result = await monitor._check_deployment_rollouts()
+        assert len(result) == 1
+        assert result[0].source == "deployment_rollout"
+        assert "degraded" in result[0].title.lower()
+
+    @pytest.mark.asyncio
+    async def test_stalled_rollout(self, monitor, mock_k8s):
+        dep = MagicMock()
+        dep.metadata.name = "worker"
+        dep.metadata.namespace = "default"
+        dep.spec.replicas = 2
+        dep.status.available_replicas = 2
+        condition = MagicMock()
+        condition.type = "Progressing"
+        condition.status = "False"
+        condition.message = "deadline exceeded"
+        dep.status.conditions = [condition]
+
+        dep_list = MagicMock()
+        dep_list.items = [dep]
+        mock_k8s.apps_v1.list_deployment_for_all_namespaces.return_value = dep_list
+
+        result = await monitor._check_deployment_rollouts()
+        assert len(result) == 1
+        assert result[0].severity == "critical"
+        assert "stalled" in result[0].title.lower()
+
+    @pytest.mark.asyncio
+    async def test_protected_namespace_skipped(self, monitor, mock_k8s):
+        dep = MagicMock()
+        dep.metadata.name = "coredns"
+        dep.metadata.namespace = "kube-system"
+        dep.spec.replicas = 2
+        dep.status.available_replicas = 0
+        dep.status.conditions = []
+
+        dep_list = MagicMock()
+        dep_list.items = [dep]
+        mock_k8s.apps_v1.list_deployment_for_all_namespaces.return_value = dep_list
+
+        result = await monitor._check_deployment_rollouts()
+        assert result == []
+
+
+class TestDispatchBatchWithSelfTuner:
+    @pytest.mark.asyncio
+    async def test_records_issues(self, monitor_full, mock_self_tuner):
+        batch = [
+            AnomalySignal(
+                source="test",
+                severity="warning",
+                title="Test",
+                details="details",
+                namespace="default",
+                resource="pod-1",
+                dedupe_key="test:default/pod-1",
+            )
+        ]
+        await monitor_full._dispatch_batch(batch)
+        mock_self_tuner.record_issue.assert_awaited_once()
+
+
+class TestGetStatusV2:
+    def test_includes_checks_list(self, monitor):
+        status = monitor.get_status()
+        assert "log_anomalies" in status["checks"]
+        assert "node_conditions" in status["checks"]
+        assert "deployment_rollouts" in status["checks"]

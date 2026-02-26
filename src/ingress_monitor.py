@@ -5,6 +5,7 @@ Validates Traefik IngressRoutes, checks Service endpoints,
 monitors DaemonSet health, and queries PVC usage.
 """
 
+import asyncio
 from typing import Any, Optional
 
 import httpx
@@ -47,7 +48,8 @@ class IngressMonitor:
         }
 
         try:
-            route = self._k8s.custom_objects.get_namespaced_custom_object(
+            route = await asyncio.to_thread(
+                self._k8s.custom_objects.get_namespaced_custom_object,
                 group="traefik.io",
                 version="v1alpha1",
                 namespace=namespace,
@@ -100,8 +102,9 @@ class IngressMonitor:
     ) -> dict[str, Any]:
         """Verify a Service has healthy endpoints."""
         try:
-            endpoints = self._k8s.core_v1.read_namespaced_endpoints(
-                service_name, namespace
+            endpoints = await asyncio.to_thread(
+                self._k8s.core_v1.read_namespaced_endpoints,
+                service_name, namespace,
             )
             ready = 0
             not_ready = 0
@@ -120,7 +123,7 @@ class IngressMonitor:
         """Check all DaemonSets have desired==ready pods."""
         results = []
         try:
-            ds_list = self._k8s.apps_v1.list_daemon_set_for_all_namespaces()
+            ds_list = await asyncio.to_thread(self._k8s.apps_v1.list_daemon_set_for_all_namespaces)
             for ds in ds_list.items:
                 ns = ds.metadata.namespace
                 if ns in settings.protected_namespaces:
@@ -178,14 +181,16 @@ class IngressMonitor:
         """List Traefik IngressRoute CRDs."""
         try:
             if namespace:
-                resp = self._k8s.custom_objects.list_namespaced_custom_object(
+                resp = await asyncio.to_thread(
+                    self._k8s.custom_objects.list_namespaced_custom_object,
                     group="traefik.io",
                     version="v1alpha1",
                     namespace=namespace,
                     plural="ingressroutes",
                 )
             else:
-                resp = self._k8s.custom_objects.list_cluster_custom_object(
+                resp = await asyncio.to_thread(
+                    self._k8s.custom_objects.list_cluster_custom_object,
                     group="traefik.io",
                     version="v1alpha1",
                     plural="ingressroutes",
@@ -232,11 +237,19 @@ class IngressMonitor:
                         content_error = f"Error page detected: {indicator}"
                         break
 
+                # Suspicious small response body on 200
+                suspicious_small_body = (
+                    resp.status_code == 200 and len(resp.content) < 100
+                )
+
                 return {
                     "status_code": resp.status_code,
                     "response_time_ms": resp.elapsed.total_seconds() * 1000,
-                    "success": resp.status_code < 500 and content_error is None,
+                    "success": resp.status_code < 500
+                    and content_error is None
+                    and not suspicious_small_body,
                     "content_error": content_error,
+                    "suspicious_small_body": suspicious_small_body,
                 }
         except Exception as exc:
             return {"success": False, "error": str(exc)}

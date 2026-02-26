@@ -180,3 +180,52 @@ class TestExtractHosts:
         routes = [{"match": "PathPrefix(`/api`)"}]
         hosts = ingress._extract_hosts(routes)
         assert hosts == []
+
+
+class TestSmallResponseBody:
+    """Test that _http_check detects suspiciously small responses."""
+
+    @pytest.mark.asyncio
+    async def test_small_body_flagged(self, ingress):
+        from unittest.mock import patch
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "ok"
+        mock_response.content = b"ok"
+        mock_response.elapsed = MagicMock()
+        mock_response.elapsed.total_seconds.return_value = 0.05
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.ingress_monitor.httpx.AsyncClient", return_value=mock_client):
+            result = await ingress._http_check("https://test.example.com/")
+
+        assert result["suspicious_small_body"] is True
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_normal_body_passes(self, ingress):
+        from unittest.mock import patch
+
+        body = "x" * 200
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = body
+        mock_response.content = body.encode()
+        mock_response.elapsed = MagicMock()
+        mock_response.elapsed.total_seconds.return_value = 0.1
+
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_response
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("src.ingress_monitor.httpx.AsyncClient", return_value=mock_client):
+            result = await ingress._http_check("https://test.example.com/")
+
+        assert result.get("suspicious_small_body") is False
+        assert result["success"] is True

@@ -281,6 +281,7 @@ class DeepHealthChecker:
         flow_check = await self._check_endpoint(
             f"https://auth.{self.domain}/if/flow/default-authentication-flow/",
             expected_status=200,
+            expected_content="authentik",
         )
         result.checks.append({"name": "authentication_flow", **flow_check})
         if not flow_check.get("success"):
@@ -316,6 +317,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://request.{self.domain}/",
             expected_status=200,
+            expected_content="Jellyseerr",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -352,6 +354,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://plex.{self.domain}/web",
             expected_status=200,
+            expected_content="Plex",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -385,6 +388,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://sonarr.{self.domain}/",
             expected_status=200,
+            expected_content="Sonarr",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -408,6 +412,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://radarr.{self.domain}/",
             expected_status=200,
+            expected_content="Radarr",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -431,6 +436,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://prowlarr.{self.domain}/",
             expected_status=200,
+            expected_content="Prowlarr",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -511,6 +517,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://argocd.{self.domain}/",
             expected_status=200,
+            expected_content="Argo CD",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -557,6 +564,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://open-webui.{self.domain}/",
             expected_status=200,
+            expected_content="Open WebUI",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -719,6 +727,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://lidarr.{self.domain}/",
             expected_status=200,
+            expected_content="Lidarr",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):
@@ -813,6 +822,7 @@ class DeepHealthChecker:
         web_check = await self._check_endpoint(
             f"https://headlamp.{self.domain}/",
             expected_status=200,
+            expected_content="Headlamp",
         )
         result.checks.append({"name": "web_interface", **web_check})
         if not web_check.get("success"):

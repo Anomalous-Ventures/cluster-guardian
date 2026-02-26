@@ -100,6 +100,7 @@ def _reset_singletons():
         ("src.dev_controller_client", "_dev_controller"),
         ("src.self_tuner", "_self_tuner"),
         ("src.incident_correlator", "_correlator"),
+        ("src.service_discovery", "_service_discovery"),
     ]
 
     # Also try agent but don't fail if it can't import

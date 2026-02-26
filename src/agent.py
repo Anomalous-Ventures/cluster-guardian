@@ -1154,6 +1154,13 @@ AI Dev Controller Integration:
 - Long-term fixes (memory limit changes, new configs, playbook additions) go to dev controller
 - Track escalated issues - don't re-escalate the same problem within 24h
 
+Escalation Classification:
+- Each anomaly is classified as QUICK_FIX, LONG_TERM, or OBSERVATION_ONLY
+- QUICK_FIX: pod restart, rollout restart, rollback, failed job deletion, scaling
+- LONG_TERM: resource limit changes, recurring issues, config changes, new playbooks needed
+- OBSERVATION_ONLY: informational signals that don't require action
+- LONG_TERM issues are auto-escalated to the dev controller
+
 When you find issues:
 1. First recall similar past issues to guide your diagnosis
 2. Understand what's wrong (check events, pod status, node status, Prometheus metrics, Loki logs)
