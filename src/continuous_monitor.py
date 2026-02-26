@@ -128,16 +128,17 @@ class ContinuousMonitor:
                 await asyncio.sleep(self._fast_loop_interval)
                 self._last_fast_loop = time.time()
 
+                check_timeout = 120  # seconds per check
                 signals = await asyncio.gather(
-                    self._check_crashloop_pods(),
-                    self._check_prometheus_alerts(),
-                    self._check_ingress_health(),
-                    self._check_daemonset_health(),
-                    self._check_pvc_usage(),
-                    self._check_gatus(),
-                    self._check_log_anomalies(),
-                    self._check_node_conditions(),
-                    self._check_deployment_rollouts(),
+                    asyncio.wait_for(self._check_crashloop_pods(), check_timeout),
+                    asyncio.wait_for(self._check_prometheus_alerts(), check_timeout),
+                    asyncio.wait_for(self._check_ingress_health(), check_timeout),
+                    asyncio.wait_for(self._check_daemonset_health(), check_timeout),
+                    asyncio.wait_for(self._check_pvc_usage(), check_timeout),
+                    asyncio.wait_for(self._check_gatus(), check_timeout),
+                    asyncio.wait_for(self._check_log_anomalies(), check_timeout),
+                    asyncio.wait_for(self._check_node_conditions(), check_timeout),
+                    asyncio.wait_for(self._check_deployment_rollouts(), check_timeout),
                     return_exceptions=True,
                 )
 
