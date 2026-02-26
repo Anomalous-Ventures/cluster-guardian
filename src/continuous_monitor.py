@@ -326,7 +326,7 @@ class ContinuousMonitor:
         """Check all nodes for unhealthy conditions."""
         signals = []
         try:
-            nodes = self._k8s.core_v1.list_node()
+            nodes = await asyncio.to_thread(self._k8s.core_v1.list_node)
             for node in nodes.items:
                 name = node.metadata.name
                 for condition in node.status.conditions or []:
@@ -360,7 +360,7 @@ class ContinuousMonitor:
         """Detect deployments where available < desired or Progressing=False."""
         signals = []
         try:
-            deployments = self._k8s.apps_v1.list_deployment_for_all_namespaces()
+            deployments = await asyncio.to_thread(self._k8s.apps_v1.list_deployment_for_all_namespaces)
             for dep in deployments.items:
                 ns = dep.metadata.namespace
                 if ns in settings.protected_namespaces:
@@ -400,55 +400,67 @@ class ContinuousMonitor:
     # ------------------------------------------------------------------
 
     async def _event_watcher(self):
-        """K8s watch API stream for Warning/Error events."""
+        """K8s watch API stream for Warning/Error events.
+
+        The kubernetes watch API is synchronous and blocks the calling
+        thread.  We run it inside ``asyncio.to_thread`` so the event
+        loop stays free to serve health probes and other coroutines.
+        """
         from kubernetes import watch
 
         while self._running:
             try:
-                w = watch.Watch()
-                self._last_event_watch = time.time()
-                for event in w.stream(
-                    self._k8s.core_v1.list_event_for_all_namespaces,
-                    timeout_seconds=300,
-                ):
-                    if not self._running:
-                        w.stop()
-                        break
-
-                    obj = event.get("object")
-                    if obj is None:
-                        continue
-
-                    if obj.type not in ("Warning", "Error"):
-                        continue
-
-                    ns = obj.metadata.namespace or "cluster"
-                    if ns in settings.protected_namespaces:
-                        continue
-
-                    involved = ""
-                    if obj.involved_object:
-                        involved = (
-                            f"{obj.involved_object.kind}/{obj.involved_object.name}"
-                        )
-
-                    signal = AnomalySignal(
-                        source="k8s_events",
-                        severity="warning" if obj.type == "Warning" else "critical",
-                        title=f"K8s event: {obj.reason}",
-                        details=obj.message or "",
-                        namespace=ns,
-                        resource=involved,
-                        dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
-                    )
+                signals = await asyncio.to_thread(self._sync_watch_events, watch)
+                for signal in signals:
                     await self._anomaly_queue.put(signal)
-                    self._last_event_watch = time.time()
-
+                self._last_event_watch = time.time()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.warning("event_watcher reconnecting", error=str(exc))
                 await asyncio.sleep(5)
+
+    def _sync_watch_events(self, watch_mod) -> list[AnomalySignal]:
+        """Blocking helper that streams K8s events and returns signals."""
+        signals: list[AnomalySignal] = []
+        w = watch_mod.Watch()
+        self._last_event_watch = time.time()
+        for event in w.stream(
+            self._k8s.core_v1.list_event_for_all_namespaces,
+            timeout_seconds=300,
+        ):
+            if not self._running:
+                w.stop()
+                break
+
+            obj = event.get("object")
+            if obj is None:
+                continue
+
+            if obj.type not in ("Warning", "Error"):
+                continue
+
+            ns = obj.metadata.namespace or "cluster"
+            if ns in settings.protected_namespaces:
+                continue
+
+            involved = ""
+            if obj.involved_object:
+                involved = (
+                    f"{obj.involved_object.kind}/{obj.involved_object.name}"
+                )
+
+            signals.append(AnomalySignal(
+                source="k8s_events",
+                severity="warning" if obj.type == "Warning" else "critical",
+                title=f"K8s event: {obj.reason}",
+                details=obj.message or "",
+                namespace=ns,
+                resource=involved,
+                dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
+            ))
+
+        return signals
 
     # ------------------------------------------------------------------
     # Anomaly dispatcher

@@ -5,6 +5,7 @@ Provides safe, rate-limited access to Kubernetes operations
 for the Cluster Guardian agent.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 from collections import deque
@@ -281,7 +282,7 @@ class K8sClient:
         """Get all pods in CrashLoopBackOff state."""
         crashing_pods = []
         try:
-            pods = self.core_v1.list_pod_for_all_namespaces()
+            pods = await asyncio.to_thread(self.core_v1.list_pod_for_all_namespaces)
             for pod in pods.items:
                 if pod.metadata.namespace in settings.protected_namespaces:
                     continue
