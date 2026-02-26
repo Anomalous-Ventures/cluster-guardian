@@ -25,18 +25,25 @@ class IngressMonitor:
         self._timeout = httpx.Timeout(10.0)
 
     async def check_all_ingress_routes(self) -> list[dict[str, Any]]:
-        """List all Traefik IngressRoute CRDs, validate each."""
-        results = []
+        """List all Traefik IngressRoute CRDs, validate each concurrently."""
         try:
             routes = await self._list_ingress_routes()
-            for route in routes:
-                check = await self.check_ingress_route(
-                    route["namespace"], route["name"]
-                )
-                results.append(check)
+            sem = asyncio.Semaphore(10)
+
+            async def _check_with_limit(route):
+                async with sem:
+                    return await self.check_ingress_route(
+                        route["namespace"], route["name"]
+                    )
+
+            results = await asyncio.gather(
+                *[_check_with_limit(r) for r in routes],
+                return_exceptions=True,
+            )
+            return [r for r in results if isinstance(r, dict)]
         except Exception as exc:
             logger.error("check_all_ingress_routes failed", error=str(exc))
-        return results
+            return []
 
     async def check_ingress_route(self, namespace: str, name: str) -> dict[str, Any]:
         """Deep check a specific IngressRoute."""
