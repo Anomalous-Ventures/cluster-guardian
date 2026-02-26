@@ -255,8 +255,11 @@ def get_self_tuner(redis=None, dev_controller=None) -> SelfTuner:
 
             redis = get_redis_client()
         if dev_controller is None:
-            from .dev_controller_client import get_dev_controller
+            from .config import settings
 
-            dev_controller = get_dev_controller()
+            if settings.dev_controller_enabled:
+                from .dev_controller_client import get_dev_controller
+
+                dev_controller = get_dev_controller()
         _self_tuner = SelfTuner(redis=redis, dev_controller=dev_controller)
     return _self_tuner
