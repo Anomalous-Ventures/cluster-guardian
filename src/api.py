@@ -158,6 +158,7 @@ class AppState:
         self.last_scan_result: Optional[Dict[str, Any]] = None
         self.websocket_connections: List[WebSocket] = []
         self.pending_approvals: List[Dict[str, Any]] = []
+        self._init_task: Optional[asyncio.Task] = None
 
 
 app_state = AppState()
@@ -170,97 +171,16 @@ app_state = AppState()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle management."""
+    """Application lifecycle management.
+
+    Heavy initialization is deferred to a background task so uvicorn can
+    start serving health probes immediately.  The /live endpoint works
+    from the moment the yield completes; /ready gates on guardian init.
+    """
     logger.info("Starting Cluster Guardian", host=settings.host, port=settings.port)
 
-    # Connect optional services (Redis, Qdrant)
-    redis = get_redis_client()
-    await redis.connect()
-    memory = get_memory()
-    await memory.connect()
-
-    # Load persisted approvals from Redis
-    try:
-        persisted = await redis.get_pending_approvals()
-        if persisted:
-            app_state.pending_approvals = persisted
-            logger.info("Loaded pending approvals from Redis", count=len(persisted))
-    except Exception as exc:
-        logger.warning("Failed to load pending approvals from Redis", error=str(exc))
-
-    # Load last scan result from Redis
-    try:
-        last_scan = await redis.get_last_scan()
-        if last_scan:
-            app_state.last_scan_result = last_scan
-            logger.info("Loaded last scan result from Redis")
-    except Exception as exc:
-        logger.warning("Failed to load last scan from Redis", error=str(exc))
-
-    # Initialize guardian
-    app_state.guardian = get_guardian()
-    logger.info("Guardian initialized")
-
-    # Start periodic scan task
-    app_state.scan_task = asyncio.create_task(periodic_scan_loop())
-
-    # Start continuous monitor
-    try:
-        from .continuous_monitor import ContinuousMonitor
-
-        cm_config = {
-            "fast_loop_interval_seconds": settings.fast_loop_interval_seconds,
-            "event_watch_enabled": settings.event_watch_enabled,
-            "anomaly_suppression_window": settings.anomaly_suppression_window,
-            "anomaly_batch_window": settings.anomaly_batch_window,
-        }
-        # Wire optional v1.0 components (non-fatal if they fail)
-        self_tuner = None
-        loki = None
-        sd = None
-        classifier = None
-        try:
-            self_tuner = get_self_tuner()
-        except Exception as exc:
-            logger.warning("Failed to init self_tuner", error=str(exc))
-        try:
-            loki = get_loki_client()
-        except Exception as exc:
-            logger.warning("Failed to init loki client", error=str(exc))
-        try:
-            if settings.service_discovery_enabled:
-                sd = get_service_discovery(
-                    k8s=app_state.guardian.k8s,
-                    health_checker=app_state.guardian.health_checker,
-                )
-        except Exception as exc:
-            logger.warning("Failed to init service discovery", error=str(exc))
-        try:
-            classifier = EscalationClassifier(
-                recurring_threshold=settings.escalation_threshold,
-            )
-        except Exception as exc:
-            logger.warning("Failed to init escalation classifier", error=str(exc))
-
-        app_state.continuous_monitor = ContinuousMonitor(
-            k8s=app_state.guardian.k8s,
-            prometheus=app_state.guardian.prometheus,
-            health_checker=app_state.guardian.health_checker,
-            ingress_monitor=get_ingress_monitor(),
-            config=cm_config,
-            self_tuner=self_tuner,
-            loki=loki,
-            service_discovery=sd,
-            escalation_classifier=classifier,
-        )
-        app_state.continuous_monitor.set_callbacks(
-            investigate=app_state.guardian.investigate_issue,
-            broadcast=broadcast_update,
-        )
-        await app_state.continuous_monitor.start()
-        logger.info("ContinuousMonitor started")
-    except Exception as exc:
-        logger.warning("Failed to start ContinuousMonitor", error=str(exc))
+    # Launch heavy init as a background task so probes are served fast
+    app_state._init_task = asyncio.create_task(_deferred_init())
 
     yield
 
@@ -271,6 +191,103 @@ async def lifespan(app: FastAPI):
     if app_state.scan_task:
         app_state.scan_task.cancel()
     await get_redis_client().close()
+
+
+async def _deferred_init():
+    """Run all heavy initialization in background so probes work immediately."""
+    try:
+        # Connect optional services (Redis, Qdrant)
+        redis = get_redis_client()
+        await redis.connect()
+        memory = get_memory()
+        await memory.connect()
+
+        # Load persisted approvals from Redis
+        try:
+            persisted = await redis.get_pending_approvals()
+            if persisted:
+                app_state.pending_approvals = persisted
+                logger.info("Loaded pending approvals from Redis", count=len(persisted))
+        except Exception as exc:
+            logger.warning("Failed to load pending approvals from Redis", error=str(exc))
+
+        # Load last scan result from Redis
+        try:
+            last_scan = await redis.get_last_scan()
+            if last_scan:
+                app_state.last_scan_result = last_scan
+                logger.info("Loaded last scan result from Redis")
+        except Exception as exc:
+            logger.warning("Failed to load last scan from Redis", error=str(exc))
+
+        # Initialize guardian in a thread to avoid blocking the event loop
+        # (LangGraph/tool binding is CPU-intensive sync work)
+        app_state.guardian = await asyncio.to_thread(get_guardian)
+        logger.info("Guardian initialized")
+
+        # Start periodic scan task
+        app_state.scan_task = asyncio.create_task(periodic_scan_loop())
+
+        # Start continuous monitor
+        try:
+            from .continuous_monitor import ContinuousMonitor
+
+            cm_config = {
+                "fast_loop_interval_seconds": settings.fast_loop_interval_seconds,
+                "event_watch_enabled": settings.event_watch_enabled,
+                "anomaly_suppression_window": settings.anomaly_suppression_window,
+                "anomaly_batch_window": settings.anomaly_batch_window,
+            }
+            # Wire optional v1.0 components (non-fatal if they fail)
+            self_tuner = None
+            loki = None
+            sd = None
+            classifier = None
+            try:
+                self_tuner = get_self_tuner()
+            except Exception as exc:
+                logger.warning("Failed to init self_tuner", error=str(exc))
+            try:
+                loki = get_loki_client()
+            except Exception as exc:
+                logger.warning("Failed to init loki client", error=str(exc))
+            try:
+                if settings.service_discovery_enabled:
+                    sd = get_service_discovery(
+                        k8s=app_state.guardian.k8s,
+                        health_checker=app_state.guardian.health_checker,
+                    )
+            except Exception as exc:
+                logger.warning("Failed to init service discovery", error=str(exc))
+            try:
+                classifier = EscalationClassifier(
+                    recurring_threshold=settings.escalation_threshold,
+                )
+            except Exception as exc:
+                logger.warning("Failed to init escalation classifier", error=str(exc))
+
+            app_state.continuous_monitor = ContinuousMonitor(
+                k8s=app_state.guardian.k8s,
+                prometheus=app_state.guardian.prometheus,
+                health_checker=app_state.guardian.health_checker,
+                ingress_monitor=get_ingress_monitor(),
+                config=cm_config,
+                self_tuner=self_tuner,
+                loki=loki,
+                service_discovery=sd,
+                escalation_classifier=classifier,
+            )
+            app_state.continuous_monitor.set_callbacks(
+                investigate=app_state.guardian.investigate_issue,
+                broadcast=broadcast_update,
+            )
+            await app_state.continuous_monitor.start()
+            logger.info("ContinuousMonitor started")
+        except Exception as exc:
+            logger.warning("Failed to start ContinuousMonitor", error=str(exc))
+
+    except Exception as exc:
+        logger.error("Deferred init failed", error=str(exc))
 
 
 async def periodic_scan_loop():
