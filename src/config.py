@@ -14,17 +14,18 @@ class Settings(BaseSettings):
     port: int = 8900
     debug: bool = False
 
-    # LLM Backend (via LiteLLM)
-    llm_base_url: str = "http://litellm.llm.svc.cluster.local:4000/v1"
-    llm_model: str = "llama3.2"
-    llm_api_key: str = "sk-spark-litellm-master-key"
+    # LLM Backend
+    llm_provider: str = "openai"
+    llm_base_url: Optional[str] = None
+    llm_model: str = "gpt-4o"
+    llm_api_key: Optional[str] = None
 
     # K8sGPT
-    k8sgpt_url: str = "http://k8sgpt.k8sgpt.svc.cluster.local:8080"
+    k8sgpt_url: Optional[str] = None
     k8sgpt_enabled: bool = True
 
     # AlertManager
-    alertmanager_url: str = "http://prometheus-kube-prometheus-alertmanager.prometheus.svc.cluster.local:9093"
+    alertmanager_url: Optional[str] = None
     alertmanager_webhook_enabled: bool = True
 
     # Kubernetes
@@ -58,8 +59,8 @@ class Settings(BaseSettings):
 
     # GitHub PR Integration
     github_token: Optional[str] = None
-    github_owner: str = "Anomalous-Ventures"
-    github_repo: str = "stax"
+    github_owner: str = ""
+    github_repo: str = ""
     github_base_branch: str = "main"
 
     # TheHive
@@ -114,15 +115,16 @@ class Settings(BaseSettings):
     dry_run_mode: bool = False
 
     # Health Check Tuning
+    health_check_domain: Optional[str] = None
     monitored_services: List[str] = []
     ssl_warning_days: int = 30
     health_check_interval: int = 300
 
     # Memory/State
-    redis_url: str = "redis://redis-ai-master.llm.svc.cluster.local:6379"
+    redis_url: Optional[str] = None
 
     # Qdrant Vector Memory
-    qdrant_url: str = "http://qdrant.llm.svc.cluster.local:6333"
+    qdrant_url: Optional[str] = None
     qdrant_collection: str = "guardian_issues"
 
     # Langfuse Observability
@@ -132,26 +134,24 @@ class Settings(BaseSettings):
 
     # Embedding
     embedding_model: str = "text-embedding-3-small"
+    embedding_base_url: Optional[str] = None
+    embedding_api_key: Optional[str] = None
 
     # Prometheus
-    prometheus_url: str = (
-        "http://prometheus-kube-prometheus-prometheus.prometheus.svc.cluster.local:9090"
-    )
+    prometheus_url: Optional[str] = None
 
     # Loki
-    loki_url: str = "http://loki.prometheus.svc.cluster.local:3100"
+    loki_url: Optional[str] = None
 
     # CrowdSec
-    crowdsec_lapi_url: str = "http://crowdsec-lapi.crowdsec.svc.cluster.local:8080"
+    crowdsec_lapi_url: Optional[str] = None
     crowdsec_api_key: Optional[str] = None
 
     # Longhorn
-    longhorn_url: str = (
-        "http://longhorn-frontend.longhorn-system.svc.cluster.local:8000"
-    )
+    longhorn_url: Optional[str] = None
 
     # Gatus Status Page
-    gatus_url: str = "http://gatus.status.svc.cluster.local:80"
+    gatus_url: Optional[str] = None
 
     # Incident Correlation
     correlation_window_seconds: int = 300
@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     anomaly_batch_window: int = 10
 
     # AI Dev Controller
-    dev_controller_url: str = "http://ai-dev-controller.llm.svc.cluster.local:8096"
+    dev_controller_url: Optional[str] = None
     dev_controller_enabled: bool = True
     escalation_threshold: int = 3
 

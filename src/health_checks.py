@@ -55,8 +55,29 @@ class DeepHealthChecker:
     - Functional tests
     """
 
-    def __init__(self, domain: str = "spooty.io"):
+    # Checks that construct URLs from self.domain and must be skipped when
+    # domain is None.
+    _DOMAIN_DEPENDENT_CHECKS = frozenset({
+        "grafana",
+        "authentik",
+        "jellyseerr",
+        "plex",
+        "sonarr",
+        "radarr",
+        "prowlarr",
+        "vault",
+        "harbor",
+        "argocd",
+        "open-webui",
+        "traefik",
+        "lidarr",
+        "qbittorrent",
+        "headlamp",
+    })
+
+    def __init__(self, domain: Optional[str] = None):
         self.domain = domain
+        self._custom_checks: Dict[str, Dict[str, Any]] = {}
         self.service_checks: Dict[str, Callable] = {
             "grafana": self._check_grafana,
             "authentik": self._check_authentik,
@@ -84,12 +105,55 @@ class DeepHealthChecker:
             "qdrant": self._check_qdrant,
         }
 
+    def register_check(
+        self,
+        name: str,
+        url: str,
+        expected_status: int = 200,
+        expected_content: Optional[str] = None,
+    ) -> None:
+        """Register a data-driven custom health check.
+
+        Args:
+            name: Unique name for this check.
+            url: URL to probe.
+            expected_status: Expected HTTP status code.
+            expected_content: Optional substring expected in the response body.
+        """
+        self._custom_checks[name] = {
+            "url": url,
+            "expected_status": expected_status,
+            "expected_content": expected_content,
+        }
+
+    async def _run_custom_check(self, name: str, spec: Dict[str, Any]) -> HealthCheckResult:
+        """Run a single data-driven custom health check."""
+        result = HealthCheckResult(service=name, healthy=True)
+        check = await self._check_endpoint(
+            url=spec["url"],
+            expected_status=spec["expected_status"],
+            expected_content=spec.get("expected_content"),
+        )
+        result.checks.append({"name": "endpoint", **check})
+        if not check.get("success"):
+            result.errors.append(
+                f"Endpoint check failed: {check.get('error', 'Unknown')}"
+            )
+            result.healthy = False
+        return result
+
     async def check_all(self) -> List[HealthCheckResult]:
-        """Run health checks on all registered services."""
-        results = []
+        """Run health checks on all registered services and custom checks."""
         tasks = [
-            self._run_check(name, check) for name, check in self.service_checks.items()
+            self._run_check(name, check)
+            for name, check in self.service_checks.items()
+            if self.domain is not None or name not in self._DOMAIN_DEPENDENT_CHECKS
         ]
+
+        # Include data-driven custom checks
+        for name, spec in self._custom_checks.items():
+            tasks.append(self._run_custom_check(name, spec))
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Filter out exceptions and convert to results
@@ -104,11 +168,22 @@ class DeepHealthChecker:
 
     async def check_service(self, service: str) -> HealthCheckResult:
         """Run health check on a specific service."""
+        # Check custom checks first
+        if service in self._custom_checks:
+            return await self._run_custom_check(service, self._custom_checks[service])
+
         if service not in self.service_checks:
             return HealthCheckResult(
                 service=service,
                 healthy=False,
                 errors=[f"Unknown service: {service}"],
+            )
+
+        if self.domain is None and service in self._DOMAIN_DEPENDENT_CHECKS:
+            return HealthCheckResult(
+                service=service,
+                healthy=False,
+                errors=[f"Skipped: no domain configured for {service}"],
             )
 
         return await self._run_check(service, self.service_checks[service])
@@ -879,7 +954,7 @@ class DeepHealthChecker:
 _health_checker: Optional[DeepHealthChecker] = None
 
 
-def get_health_checker(domain: str = "spooty.io") -> DeepHealthChecker:
+def get_health_checker(domain: Optional[str] = "spooty.io") -> DeepHealthChecker:
     """Get or create health checker singleton."""
     global _health_checker
     if _health_checker is None:

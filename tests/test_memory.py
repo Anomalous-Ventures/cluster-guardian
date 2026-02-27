@@ -12,8 +12,8 @@ def unavailable_vm(settings_env):
     """Return a VectorMemory instance with available=False."""
     vm = VectorMemory(
         qdrant_url="http://fake:6333",
-        litellm_url="http://fake:4000",
-        litellm_api_key="test",
+        embedding_url="http://fake:4000",
+        embedding_api_key="test",
     )
     vm.available = False
     return vm
@@ -24,8 +24,8 @@ def available_vm(settings_env):
     """Return a VectorMemory instance with available=True and mocked Qdrant client."""
     vm = VectorMemory(
         qdrant_url="http://fake:6333",
-        litellm_url="http://fake:4000",
-        litellm_api_key="test",
+        embedding_url="http://fake:4000",
+        embedding_api_key="test",
     )
     vm.available = True
     vm._client = AsyncMock()

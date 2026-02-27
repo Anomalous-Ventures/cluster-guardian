@@ -7,8 +7,10 @@ batched, and dispatched to the LLM agent for investigation.
 """
 
 import asyncio
+import hashlib
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Optional
 
 import structlog
@@ -30,6 +32,12 @@ class AnomalySignal:
     namespace: str
     resource: str
     dedupe_key: str
+
+
+def _investigation_id(group_key: str) -> str:
+    """Generate a unique investigation ID from a group key and current time."""
+    h = hashlib.sha256(f"{group_key}-{time.time()}".encode()).hexdigest()[:12]
+    return f"inv-{h}"
 
 
 class ContinuousMonitor:
@@ -562,23 +570,31 @@ class ContinuousMonitor:
 
             description = "\n".join(lines)
 
+            # Generate investigation ID
+            investigation_id = _investigation_id(group_key)
+
             # Broadcast to WebSocket clients
             if self._broadcast_callback:
                 try:
                     await self._broadcast_callback(
                         {
                             "type": "anomaly_detected",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "investigation_id": investigation_id,
                             "data": {
                                 "group": group_key,
                                 "severity": highest_severity,
                                 "escalation": escalation_level.value if escalation_level else None,
+                                "description": description,
                                 "signals": [
                                     {
                                         "source": s.source,
                                         "severity": s.severity,
                                         "title": s.title,
+                                        "details": s.details,
                                         "namespace": s.namespace,
                                         "resource": s.resource,
+                                        "dedupe_key": s.dedupe_key,
                                     }
                                     for s in signals
                                 ],
@@ -613,6 +629,7 @@ class ContinuousMonitor:
                         self._investigate_callback(
                             description=description,
                             thread_id=f"cm-{group_key.replace('/', '-')}",
+                            investigation_id=investigation_id,
                         )
                     )
                 except Exception as exc:

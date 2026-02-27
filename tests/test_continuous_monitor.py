@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.continuous_monitor import AnomalySignal, ContinuousMonitor
+from src.continuous_monitor import AnomalySignal, ContinuousMonitor, _investigation_id
 
 
 @pytest.fixture
@@ -419,6 +419,86 @@ class TestDispatchBatchWithSelfTuner:
         ]
         await monitor_full._dispatch_batch(batch)
         mock_self_tuner.record_issue.assert_awaited_once()
+
+
+class TestInvestigationId:
+    def test_format(self):
+        inv_id = _investigation_id("default/pod-1")
+        assert inv_id.startswith("inv-")
+        assert len(inv_id) == 16  # "inv-" + 12 hex chars
+
+    def test_unique(self):
+        ids = {_investigation_id("default/pod-1") for _ in range(10)}
+        # time.time() changes between calls, so IDs should differ
+        assert len(ids) >= 2
+
+
+class TestEnrichedBroadcast:
+    @pytest.mark.asyncio
+    async def test_broadcast_includes_enriched_fields(self, monitor, settings_env):
+        """The anomaly_detected broadcast should include timestamp, details, and investigation_id."""
+        captured = []
+
+        async def capture_broadcast(msg):
+            captured.append(msg)
+
+        investigate_mock = AsyncMock()
+        monitor.set_callbacks(investigate=investigate_mock, broadcast=capture_broadcast)
+
+        batch = [
+            AnomalySignal(
+                source="test",
+                severity="warning",
+                title="Test anomaly",
+                details="Something went wrong in the cluster",
+                namespace="default",
+                resource="pod-1",
+                dedupe_key="test:default/pod-1",
+            )
+        ]
+        await monitor._dispatch_batch(batch)
+
+        assert len(captured) == 1
+        msg = captured[0]
+        assert msg["type"] == "anomaly_detected"
+        assert "timestamp" in msg
+        assert "investigation_id" in msg
+        assert msg["investigation_id"].startswith("inv-")
+
+        data = msg["data"]
+        assert "description" in data
+        assert len(data["signals"]) == 1
+
+        sig = data["signals"][0]
+        assert sig["details"] == "Something went wrong in the cluster"
+        assert sig["dedupe_key"] == "test:default/pod-1"
+
+    @pytest.mark.asyncio
+    async def test_investigation_id_passed_to_callback(self, monitor, settings_env):
+        """The investigate callback should receive investigation_id."""
+        investigate_mock = AsyncMock()
+        broadcast_mock = AsyncMock()
+        monitor.set_callbacks(investigate=investigate_mock, broadcast=broadcast_mock)
+
+        batch = [
+            AnomalySignal(
+                source="test",
+                severity="warning",
+                title="Test",
+                details="details",
+                namespace="default",
+                resource="pod-1",
+                dedupe_key="test:default/pod-1",
+            )
+        ]
+        await monitor._dispatch_batch(batch)
+
+        investigate_mock.assert_called_once()
+        call_kwargs = investigate_mock.call_args
+        # Should have investigation_id kwarg
+        assert "investigation_id" in call_kwargs.kwargs or (
+            len(call_kwargs.args) > 2
+        )
 
 
 class TestGetStatusV2:
