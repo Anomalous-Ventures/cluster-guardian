@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements-dev.txt
-      - run: pytest tests/ -v --tb=short --cov=src --cov-report=xml --cov-report=term-missing
+      - run: pytest tests/ -v --tb=short --cov=src --cov-report=xml --cov-report=term-missing --ignore=tests/e2e/
 
   integration-test:
     runs-on: ubuntu-latest
@@ -55,6 +55,20 @@ jobs:
         env:
           CLUSTER_GUARDIAN_LLM_API_KEY: "test-key"
           KUBECONFIG: ${{ env.HOME }}/.kube/config
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-dev.txt
+      - name: Run e2e tests
+        run: pytest tests/e2e/ -v --timeout=120 -m "not llm_real"
+        env:
+          CLUSTER_GUARDIAN_E2E: "1"
+          CLUSTER_GUARDIAN_LLM_API_KEY: "test-key"
 
   docker-build:
     runs-on: ubuntu-latest

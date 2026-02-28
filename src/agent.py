@@ -1244,6 +1244,27 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             self_tuner=self.self_tuner,
         )
 
+        # Apply quorum gates to destructive tools if enabled
+        self.quorum_evaluator = None
+        if settings.quorum_enabled:
+            from .quorum import QuorumEvaluator
+            from .quorum_tools import apply_quorum_gates
+
+            self.quorum_evaluator = QuorumEvaluator(
+                num_agents=settings.quorum_agents,
+                threshold=settings.quorum_threshold,
+            )
+            self.tools = apply_quorum_gates(
+                self.tools,
+                self.quorum_evaluator,
+                broadcast_callback=self._broadcast_callback,
+            )
+            logger.info(
+                "Quorum mechanism enabled",
+                agents=settings.quorum_agents,
+                threshold=settings.quorum_threshold,
+            )
+
         # Bind tools to LLM
         self.llm_with_tools = self.llm.bind_tools(self.tools)
 

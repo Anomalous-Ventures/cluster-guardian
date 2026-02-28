@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+markers = [
+    "e2e: End-to-end tests requiring full server",
+    "llm_real: Tests requiring real LLM API key",
+]
+asyncio_mode = "auto"

@@ -1,5 +1,6 @@
 """Shared test fixtures for cluster-guardian."""
 
+import os
 import sys
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,58 +10,57 @@ import pytest_asyncio
 
 # ---------------------------------------------------------------------------
 # Stub third-party modules broken on Python 3.14 BEFORE any src imports.
-# langfuse uses pydantic.v1 which is broken on 3.14.
-# protobuf gencode/runtime version mismatch in k8sgpt proto files.
-# langchain_core has pydantic v1 compatibility issues.
+# E2E tests set CLUSTER_GUARDIAN_E2E=1 and handle their own stubs/mocks.
 # ---------------------------------------------------------------------------
-_STUB_MODULES = [
-    # langfuse: pydantic v1 broken on 3.14
-    "langfuse",
-    "langfuse.callback",
-    "langfuse.batch_evaluation",
-    "langfuse.api",
-    "langfuse.api.resources",
-    # grpc / protobuf: version mismatch
-    "grpc",
-    "grpc.aio",
-    "grpc._channel",
-    "google.protobuf.runtime_version",
-    # kubernetes: depends on 'six' (removed) and 'dateutil' (missing on 3.14)
-    "six",
-    "six.moves",
-    "six.moves.http_client",
-    "six.moves.urllib",
-    "six.moves.urllib.parse",
-    "dateutil",
-    "dateutil.parser",
-    "kubernetes",
-    "kubernetes.client",
-    "kubernetes.client.rest",
-    "kubernetes.config",
-    "kubernetes.watch",
-    # qdrant_client: metaclass conflict on 3.14
-    "qdrant_client",
-    "qdrant_client.http",
-    "qdrant_client.http.models",
-]
+if os.environ.get("CLUSTER_GUARDIAN_E2E") != "1":
+    _STUB_MODULES = [
+        # langfuse: pydantic v1 broken on 3.14
+        "langfuse",
+        "langfuse.callback",
+        "langfuse.batch_evaluation",
+        "langfuse.api",
+        "langfuse.api.resources",
+        # grpc / protobuf: version mismatch
+        "grpc",
+        "grpc.aio",
+        "grpc._channel",
+        "google.protobuf.runtime_version",
+        # kubernetes: depends on 'six' (removed) and 'dateutil' (missing on 3.14)
+        "six",
+        "six.moves",
+        "six.moves.http_client",
+        "six.moves.urllib",
+        "six.moves.urllib.parse",
+        "dateutil",
+        "dateutil.parser",
+        "kubernetes",
+        "kubernetes.client",
+        "kubernetes.client.rest",
+        "kubernetes.config",
+        "kubernetes.watch",
+        # qdrant_client: metaclass conflict on 3.14
+        "qdrant_client",
+        "qdrant_client.http",
+        "qdrant_client.http.models",
+    ]
 
-for _mod in _STUB_MODULES:
-    sys.modules.setdefault(_mod, MagicMock())
+    for _mod in _STUB_MODULES:
+        sys.modules.setdefault(_mod, MagicMock())
 
-# Also stub the proto modules that fail on protobuf version mismatch
-_proto_mock = MagicMock()
-sys.modules.setdefault("src.proto", _proto_mock)
-sys.modules.setdefault("src.proto.k8sgpt_pb2", _proto_mock)
-sys.modules.setdefault("src.proto.k8sgpt_pb2_grpc", _proto_mock)
+    # Also stub the proto modules that fail on protobuf version mismatch
+    _proto_mock = MagicMock()
+    sys.modules.setdefault("src.proto", _proto_mock)
+    sys.modules.setdefault("src.proto.k8sgpt_pb2", _proto_mock)
+    sys.modules.setdefault("src.proto.k8sgpt_pb2_grpc", _proto_mock)
 
-# Provide realistic qdrant_client stubs so VectorMemory can be imported
-_qdrant_mock = sys.modules["qdrant_client"]
-_qdrant_http_models = sys.modules["qdrant_client.http.models"]
-_qdrant_http_models.Distance = MagicMock()
-_qdrant_http_models.Distance.COSINE = "Cosine"
-_qdrant_http_models.PointStruct = MagicMock()
-_qdrant_http_models.VectorParams = MagicMock()
-_qdrant_mock.AsyncQdrantClient = MagicMock()
+    # Provide realistic qdrant_client stubs so VectorMemory can be imported
+    _qdrant_mock = sys.modules["qdrant_client"]
+    _qdrant_http_models = sys.modules["qdrant_client.http.models"]
+    _qdrant_http_models.Distance = MagicMock()
+    _qdrant_http_models.Distance.COSINE = "Cosine"
+    _qdrant_http_models.PointStruct = MagicMock()
+    _qdrant_http_models.VectorParams = MagicMock()
+    _qdrant_mock.AsyncQdrantClient = MagicMock()
 
 
 # ---------------------------------------------------------------------------
