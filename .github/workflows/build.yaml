@@ -57,10 +57,10 @@ jobs:
 
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: stax-builder
     env:
       KUBECONFIG: /home/pestilence/.kube/microk8s-config
-      PULUMI_CONFIG_PASSPHRASE: stax-stage
     steps:
       - name: Record current image for rollback
         id: current
@@ -68,17 +68,12 @@ jobs:
           CURRENT=$(kubectl get deploy cluster-guardian -n stax-ops -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
           echo "image=$CURRENT" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy via Pulumi
-        working-directory: /home/pestilence/repos/stax/pulumi/stacks/16-sre-agent
+      - name: Deploy new image
         env:
           GUARDIAN_IMAGE: ${{ needs.build.outputs.image }}
         run: |
-          export PATH="/home/pestilence/.pulumi/bin:$PATH"
           echo "Deploying image: $GUARDIAN_IMAGE"
-          pulumi up --yes --skip-preview --stack stage
-
-      - name: Wait for rollout
-        run: |
+          kubectl set image deployment/cluster-guardian cluster-guardian="$GUARDIAN_IMAGE" -n stax-ops
           kubectl rollout status deployment/cluster-guardian -n stax-ops --timeout=180s
 
       - name: Validate health
@@ -94,8 +89,6 @@ jobs:
               wait $PF_PID 2>/dev/null || true
               if [ "$STATUS" = "healthy" ]; then
                 echo "Health check passed: status=healthy"
-                VERSION=$(curl -sf http://localhost:18900/health 2>/dev/null | jq -r '.version' 2>/dev/null || echo "unknown")
-                echo "Running version: $VERSION"
                 exit 0
               fi
               echo "Attempt $i: health status=$STATUS"
@@ -109,11 +102,9 @@ jobs:
 
       - name: Rollback on failure
         if: failure() && steps.current.outputs.image != ''
-        working-directory: /home/pestilence/repos/stax/pulumi/stacks/16-sre-agent
         env:
-          GUARDIAN_IMAGE: ${{ steps.current.outputs.image }}
+          ROLLBACK_IMAGE: ${{ steps.current.outputs.image }}
         run: |
-          export PATH="/home/pestilence/.pulumi/bin:$PATH"
-          echo "Rolling back to: $GUARDIAN_IMAGE"
-          pulumi up --yes --skip-preview --stack stage
+          echo "Rolling back to: $ROLLBACK_IMAGE"
+          kubectl set image deployment/cluster-guardian cluster-guardian="$ROLLBACK_IMAGE" -n stax-ops
           kubectl rollout status deployment/cluster-guardian -n stax-ops --timeout=120s
