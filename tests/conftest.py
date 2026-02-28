@@ -1,5 +1,6 @@
 """Shared test fixtures for cluster-guardian."""
 
+import os
 import sys
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,9 +10,7 @@ import pytest_asyncio
 
 # ---------------------------------------------------------------------------
 # Stub third-party modules broken on Python 3.14 BEFORE any src imports.
-# langfuse uses pydantic.v1 which is broken on 3.14.
-# protobuf gencode/runtime version mismatch in k8sgpt proto files.
-# langchain_core has pydantic v1 compatibility issues.
+# Uses setdefault() so real modules are never overwritten if already loaded.
 # ---------------------------------------------------------------------------
 _STUB_MODULES = [
     # langfuse: pydantic v1 broken on 3.14
@@ -80,13 +79,24 @@ def settings_env(monkeypatch):
 # Singleton reset fixtures
 # ---------------------------------------------------------------------------
 
+# Snapshot CLUSTER_GUARDIAN_* env vars at import time (before any fixtures run).
+# This captures the pristine state before session-scoped e2e fixtures pollute.
+_PRISTINE_ENV: dict[str, str] = {
+    k: v for k, v in os.environ.items() if k.startswith("CLUSTER_GUARDIAN_")
+}
+
 
 @pytest.fixture(autouse=True)
-def _reset_singletons():
+def _reset_singletons(request):
     """Reset all module-level singletons between tests.
+
+    For non-e2e tests, also restores CLUSTER_GUARDIAN_* env vars to their
+    pristine pre-session state so session-scoped e2e fixtures don't leak.
 
     Uses getattr to gracefully handle modules that failed to import.
     """
+    _is_e2e = any(m.name == "e2e" for m in request.node.iter_markers())
+
     modules_and_attrs = [
         ("src.k8s_client", "_k8s_client"),
         ("src.redis_client", "_redis_client"),
@@ -121,6 +131,16 @@ def _reset_singletons():
                 setattr(mod, attr, None)
         except Exception:
             pass
+
+    # Restore env vars to pristine pre-session state for non-e2e tests.
+    # E2e tests need env vars from the session-scoped guardian_server fixture.
+    if not _is_e2e:
+        prefix = "CLUSTER_GUARDIAN_"
+        current_keys = {k for k in os.environ if k.startswith(prefix)}
+        for key in current_keys - set(_PRISTINE_ENV):
+            del os.environ[key]
+        for key, value in _PRISTINE_ENV.items():
+            os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------

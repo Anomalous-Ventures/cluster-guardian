@@ -180,6 +180,11 @@ class Settings(BaseSettings):
     # Auto-escalation for recurring issues
     auto_escalate_recurring: bool = True
 
+    # Quorum mechanism
+    quorum_enabled: bool = False
+    quorum_agents: int = 3
+    quorum_threshold: float = 0.5
+
     class Config:
         env_prefix = "CLUSTER_GUARDIAN_"
 
