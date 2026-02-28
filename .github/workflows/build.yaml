@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: stax-builder
     outputs:
-      image: ${{ steps.image.outputs.ref }}
+      image_tag: ${{ steps.image.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -49,11 +49,11 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
-      - name: Output image ref
+      - name: Output image tag
         id: image
         run: |
           SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "ref=${{ secrets.HARBOR_REGISTRY }}/library/cluster-guardian:sha-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: build
@@ -70,7 +70,7 @@ jobs:
 
       - name: Deploy new image
         env:
-          GUARDIAN_IMAGE: ${{ needs.build.outputs.image }}
+          GUARDIAN_IMAGE: ${{ secrets.HARBOR_REGISTRY }}/library/cluster-guardian:${{ needs.build.outputs.image_tag }}
         run: |
           echo "Deploying image: $GUARDIAN_IMAGE"
           kubectl set image deployment/cluster-guardian cluster-guardian="$GUARDIAN_IMAGE" -n stax-ops
