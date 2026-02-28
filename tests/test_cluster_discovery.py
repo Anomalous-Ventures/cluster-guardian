@@ -54,7 +54,9 @@ async def test_discover_list_services_fails():
     k8s.core_v1.list_service_for_all_namespaces.side_effect = RuntimeError("fail")
     cd = ClusterDiscovery(k8s_client=k8s)
 
-    with patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+    with patch(
+        "src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock
+    ) as mock_thread:
         mock_thread.side_effect = RuntimeError("fail")
         result = await cd.discover()
 
@@ -64,7 +66,9 @@ async def test_discover_list_services_fails():
 @pytest.mark.asyncio
 async def test_discover_finds_prometheus():
     """discover() correctly identifies a Prometheus service."""
-    svc = _make_service("prometheus-kube-prometheus-prometheus", "prometheus", [(9090, "http")])
+    svc = _make_service(
+        "prometheus-kube-prometheus-prometheus", "prometheus", [(9090, "http")]
+    )
     svc_list = _make_svc_list([svc])
 
     k8s = MagicMock()
@@ -72,7 +76,11 @@ async def test_discover_finds_prometheus():
     cd = ClusterDiscovery(k8s_client=k8s)
 
     with (
-        patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock, return_value=svc_list),
+        patch(
+            "src.cluster_discovery.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=svc_list,
+        ),
         patch.object(cd, "_probe", new_callable=AsyncMock, return_value=True),
     ):
         result = await cd.discover()
@@ -92,7 +100,11 @@ async def test_discover_finds_redis_with_redis_scheme():
     cd = ClusterDiscovery(k8s_client=k8s)
 
     with (
-        patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock, return_value=svc_list),
+        patch(
+            "src.cluster_discovery.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=svc_list,
+        ),
         patch.object(cd, "_probe", new_callable=AsyncMock, return_value=True),
     ):
         result = await cd.discover()
@@ -111,7 +123,11 @@ async def test_discover_uses_default_port_when_matching():
     cd = ClusterDiscovery(k8s_client=k8s)
 
     with (
-        patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock, return_value=svc_list),
+        patch(
+            "src.cluster_discovery.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=svc_list,
+        ),
         patch.object(cd, "_probe", new_callable=AsyncMock, return_value=True),
     ):
         result = await cd.discover()
@@ -130,7 +146,11 @@ async def test_discover_falls_back_to_first_port():
     cd = ClusterDiscovery(k8s_client=k8s)
 
     with (
-        patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock, return_value=svc_list),
+        patch(
+            "src.cluster_discovery.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=svc_list,
+        ),
         patch.object(cd, "_probe", new_callable=AsyncMock, return_value=True),
     ):
         result = await cd.discover()
@@ -155,7 +175,11 @@ async def test_discover_multiple_services():
     cd = ClusterDiscovery(k8s_client=k8s)
 
     with (
-        patch("src.cluster_discovery.asyncio.to_thread", new_callable=AsyncMock, return_value=svc_list),
+        patch(
+            "src.cluster_discovery.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=svc_list,
+        ),
         patch.object(cd, "_probe", new_callable=AsyncMock, return_value=True),
     ):
         result = await cd.discover()

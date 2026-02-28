@@ -1209,9 +1209,9 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         self.llm = create_llm()
 
         # Broadcast callback for investigation lifecycle events
-        self._broadcast_callback: Optional[
-            Callable[..., Coroutine[Any, Any, Any]]
-        ] = None
+        self._broadcast_callback: Optional[Callable[..., Coroutine[Any, Any, Any]]] = (
+            None
+        )
 
         # Langfuse observability
         self.langfuse_handler = None
@@ -1446,9 +1446,7 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             investigation_id: Unique ID for tracking this investigation's lifecycle
         """
         if investigation_id is None:
-            h = hashlib.sha256(
-                f"{description}-{time.time()}".encode()
-            ).hexdigest()[:12]
+            h = hashlib.sha256(f"{description}-{time.time()}".encode()).hexdigest()[:12]
             investigation_id = f"inv-{h}"
 
         logger.info(
@@ -1531,7 +1529,11 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                     tool_results = []
                     for msg in msgs:
                         if hasattr(msg, "name") and hasattr(msg, "content"):
-                            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                            content = (
+                                msg.content
+                                if isinstance(msg.content, str)
+                                else str(msg.content)
+                            )
                             tool_results.append(
                                 {"name": msg.name, "result": content[:500]}
                             )

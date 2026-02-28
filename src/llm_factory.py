@@ -48,6 +48,7 @@ def create_llm():
 
     elif provider == "azure_openai":
         from langchain_openai import AzureChatOpenAI
+
         kwargs = {
             "model": settings.llm_model,
             "temperature": 0.1,

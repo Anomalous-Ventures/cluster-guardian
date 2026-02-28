@@ -45,7 +45,9 @@ class ServiceDiscovery:
                     continue
 
                 # Derive a service name from the IngressRoute name
-                svc_name = name.lower().replace("-ingressroute", "").replace("-ingress", "")
+                svc_name = (
+                    name.lower().replace("-ingressroute", "").replace("-ingress", "")
+                )
 
                 if svc_name in known_services or svc_name in self._discovered:
                     continue
@@ -118,9 +120,7 @@ class ServiceDiscovery:
                         break
 
                 # Small response body check
-                suspicious_body = (
-                    resp.status_code == 200 and len(resp.content) < 100
-                )
+                suspicious_body = resp.status_code == 200 and len(resp.content) < 100
 
                 return {
                     "status_code": resp.status_code,
@@ -169,9 +169,11 @@ def get_service_discovery(k8s=None, health_checker=None) -> ServiceDiscovery:
     if _service_discovery is None:
         if k8s is None:
             from .k8s_client import get_k8s_client
+
             k8s = get_k8s_client()
         if health_checker is None:
             from .health_checks import get_health_checker
+
             health_checker = get_health_checker()
         _service_discovery = ServiceDiscovery(k8s=k8s, health_checker=health_checker)
     return _service_discovery

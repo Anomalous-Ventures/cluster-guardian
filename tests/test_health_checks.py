@@ -62,8 +62,7 @@ async def test_check_all_skips_domain_dependent_when_no_domain():
 
     # Patch all non-domain-dependent checks to return healthy
     non_domain = [
-        name for name in hc.service_checks
-        if name not in hc._DOMAIN_DEPENDENT_CHECKS
+        name for name in hc.service_checks if name not in hc._DOMAIN_DEPENDENT_CHECKS
     ]
     for name in non_domain:
         hc.service_checks[name] = AsyncMock(
@@ -136,9 +135,7 @@ def test_register_check():
 def test_register_check_with_content():
     """register_check() stores expected_content."""
     hc = DeepHealthChecker()
-    hc.register_check(
-        "my-app", "http://my-app/", expected_content="Welcome"
-    )
+    hc.register_check("my-app", "http://my-app/", expected_content="Welcome")
     assert hc._custom_checks["my-app"]["expected_content"] == "Welcome"
 
 
@@ -149,8 +146,7 @@ async def test_custom_check_runs_in_check_all():
 
     # Stub all built-in non-domain checks
     non_domain = [
-        name for name in hc.service_checks
-        if name not in hc._DOMAIN_DEPENDENT_CHECKS
+        name for name in hc.service_checks if name not in hc._DOMAIN_DEPENDENT_CHECKS
     ]
     for name in non_domain:
         hc.service_checks[name] = AsyncMock(
@@ -161,7 +157,11 @@ async def test_custom_check_runs_in_check_all():
     hc.register_check("my-custom", "http://custom:8080/health")
 
     with patch.object(hc, "_check_endpoint", new_callable=AsyncMock) as mock_ep:
-        mock_ep.return_value = {"url": "http://custom:8080/health", "success": True, "status_code": 200}
+        mock_ep.return_value = {
+            "url": "http://custom:8080/health",
+            "success": True,
+            "status_code": 200,
+        }
         results = await hc.check_all()
 
     result_names = {r.service for r in results}
@@ -176,8 +176,14 @@ async def test_custom_check_unhealthy_on_failure():
     hc.register_check("failing-svc", "http://fail:8080/health")
 
     with patch.object(hc, "_check_endpoint", new_callable=AsyncMock) as mock_ep:
-        mock_ep.return_value = {"url": "http://fail:8080/health", "success": False, "error": "Connection refused"}
-        result = await hc._run_custom_check("failing-svc", hc._custom_checks["failing-svc"])
+        mock_ep.return_value = {
+            "url": "http://fail:8080/health",
+            "success": False,
+            "error": "Connection refused",
+        }
+        result = await hc._run_custom_check(
+            "failing-svc", hc._custom_checks["failing-svc"]
+        )
 
     assert result.healthy is False
     assert "Endpoint check failed" in result.errors[0]
@@ -190,7 +196,11 @@ async def test_check_service_resolves_custom_check():
     hc.register_check("custom-api", "http://api:3000/ping")
 
     with patch.object(hc, "_check_endpoint", new_callable=AsyncMock) as mock_ep:
-        mock_ep.return_value = {"url": "http://api:3000/ping", "success": True, "status_code": 200}
+        mock_ep.return_value = {
+            "url": "http://api:3000/ping",
+            "success": True,
+            "status_code": 200,
+        }
         result = await hc.check_service("custom-api")
 
     assert result.service == "custom-api"
@@ -302,6 +312,7 @@ def test_get_health_checker_none_domain():
     """get_health_checker(domain=None) creates checker with no domain."""
     # Reset singleton
     import src.health_checks
+
     src.health_checks._health_checker = None
 
     hc = get_health_checker(domain=None)

@@ -210,7 +210,9 @@ async def _deferred_init():
                 app_state.pending_approvals = persisted
                 logger.info("Loaded pending approvals from Redis", count=len(persisted))
         except Exception as exc:
-            logger.warning("Failed to load pending approvals from Redis", error=str(exc))
+            logger.warning(
+                "Failed to load pending approvals from Redis", error=str(exc)
+            )
 
         # Load last scan result from Redis
         try:

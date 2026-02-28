@@ -111,7 +111,8 @@ class IngressMonitor:
         try:
             endpoints = await asyncio.to_thread(
                 self._k8s.core_v1.read_namespaced_endpoints,
-                service_name, namespace,
+                service_name,
+                namespace,
             )
             ready = 0
             not_ready = 0
@@ -130,7 +131,9 @@ class IngressMonitor:
         """Check all DaemonSets have desired==ready pods."""
         results = []
         try:
-            ds_list = await asyncio.to_thread(self._k8s.apps_v1.list_daemon_set_for_all_namespaces)
+            ds_list = await asyncio.to_thread(
+                self._k8s.apps_v1.list_daemon_set_for_all_namespaces
+            )
             for ds in ds_list.items:
                 ns = ds.metadata.namespace
                 if ns in settings.protected_namespaces:

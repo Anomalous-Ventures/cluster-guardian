@@ -51,7 +51,10 @@ class TestRefresh:
         mock_k8s.custom_objects.list_cluster_custom_object.return_value = {
             "items": [
                 {
-                    "metadata": {"name": "grafana-ingressroute", "namespace": "monitoring"},
+                    "metadata": {
+                        "name": "grafana-ingressroute",
+                        "namespace": "monitoring",
+                    },
                     "spec": {
                         "routes": [{"match": "Host(`grafana.spooty.io`)"}],
                     },
@@ -94,7 +97,9 @@ class TestRefresh:
 
     @pytest.mark.asyncio
     async def test_error_handling(self, discovery, mock_k8s):
-        mock_k8s.custom_objects.list_cluster_custom_object.side_effect = Exception("fail")
+        mock_k8s.custom_objects.list_cluster_custom_object.side_effect = Exception(
+            "fail"
+        )
         new = await discovery.refresh()
         assert new == []
 

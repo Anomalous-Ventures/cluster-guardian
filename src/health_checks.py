@@ -57,23 +57,25 @@ class DeepHealthChecker:
 
     # Checks that construct URLs from self.domain and must be skipped when
     # domain is None.
-    _DOMAIN_DEPENDENT_CHECKS = frozenset({
-        "grafana",
-        "authentik",
-        "jellyseerr",
-        "plex",
-        "sonarr",
-        "radarr",
-        "prowlarr",
-        "vault",
-        "harbor",
-        "argocd",
-        "open-webui",
-        "traefik",
-        "lidarr",
-        "qbittorrent",
-        "headlamp",
-    })
+    _DOMAIN_DEPENDENT_CHECKS = frozenset(
+        {
+            "grafana",
+            "authentik",
+            "jellyseerr",
+            "plex",
+            "sonarr",
+            "radarr",
+            "prowlarr",
+            "vault",
+            "harbor",
+            "argocd",
+            "open-webui",
+            "traefik",
+            "lidarr",
+            "qbittorrent",
+            "headlamp",
+        }
+    )
 
     def __init__(self, domain: Optional[str] = None):
         self.domain = domain
@@ -126,7 +128,9 @@ class DeepHealthChecker:
             "expected_content": expected_content,
         }
 
-    async def _run_custom_check(self, name: str, spec: Dict[str, Any]) -> HealthCheckResult:
+    async def _run_custom_check(
+        self, name: str, spec: Dict[str, Any]
+    ) -> HealthCheckResult:
         """Run a single data-driven custom health check."""
         result = HealthCheckResult(service=name, healthy=True)
         check = await self._check_endpoint(

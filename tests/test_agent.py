@@ -96,19 +96,21 @@ class TestBroadcastCallback:
 
     def _make_guardian(self, settings_env):
         """Create a ClusterGuardian with mocked dependencies."""
-        with patch("src.agent.get_k8s_client"), \
-             patch("src.agent.get_k8sgpt_client"), \
-             patch("src.agent.get_health_checker"), \
-             patch("src.agent.get_prometheus_client"), \
-             patch("src.agent.get_loki_client"), \
-             patch("src.agent.get_cert_monitor"), \
-             patch("src.agent.get_storage_monitor"), \
-             patch("src.agent.get_crowdsec_client"), \
-             patch("src.agent.get_gatus_client"), \
-             patch("src.agent.get_ingress_monitor"), \
-             patch("src.agent.get_dev_controller"), \
-             patch("src.agent.get_self_tuner"), \
-             patch("src.agent.create_llm") as mllm:
+        with (
+            patch("src.agent.get_k8s_client"),
+            patch("src.agent.get_k8sgpt_client"),
+            patch("src.agent.get_health_checker"),
+            patch("src.agent.get_prometheus_client"),
+            patch("src.agent.get_loki_client"),
+            patch("src.agent.get_cert_monitor"),
+            patch("src.agent.get_storage_monitor"),
+            patch("src.agent.get_crowdsec_client"),
+            patch("src.agent.get_gatus_client"),
+            patch("src.agent.get_ingress_monitor"),
+            patch("src.agent.get_dev_controller"),
+            patch("src.agent.get_self_tuner"),
+            patch("src.agent.create_llm") as mllm,
+        ):
             mock_llm = MagicMock()
             mock_llm.bind_tools = MagicMock(return_value=MagicMock())
             mllm.return_value = mock_llm

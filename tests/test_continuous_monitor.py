@@ -73,7 +73,13 @@ def monitor(cm_config, mock_k8s, mock_prometheus, mock_ingress, settings_env):
 
 @pytest.fixture
 def monitor_full(
-    cm_config, mock_k8s, mock_prometheus, mock_ingress, mock_self_tuner, mock_loki, settings_env
+    cm_config,
+    mock_k8s,
+    mock_prometheus,
+    mock_ingress,
+    mock_self_tuner,
+    mock_loki,
+    settings_env,
 ):
     return ContinuousMonitor(
         k8s=mock_k8s,
@@ -496,9 +502,7 @@ class TestEnrichedBroadcast:
         investigate_mock.assert_called_once()
         call_kwargs = investigate_mock.call_args
         # Should have investigation_id kwarg
-        assert "investigation_id" in call_kwargs.kwargs or (
-            len(call_kwargs.args) > 2
-        )
+        assert "investigation_id" in call_kwargs.kwargs or (len(call_kwargs.args) > 2)
 
 
 class TestGetStatusV2:

@@ -13,15 +13,19 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-QUICK_FIX_SOURCES = frozenset({
-    "k8s_crashloop",
-    "gatus",
-    "daemonset",
-})
+QUICK_FIX_SOURCES = frozenset(
+    {
+        "k8s_crashloop",
+        "gatus",
+        "daemonset",
+    }
+)
 
-LONG_TERM_SOURCES = frozenset({
-    "node_condition",
-})
+LONG_TERM_SOURCES = frozenset(
+    {
+        "node_condition",
+    }
+)
 
 QUICK_FIX_KEYWORDS = [
     "restart",
