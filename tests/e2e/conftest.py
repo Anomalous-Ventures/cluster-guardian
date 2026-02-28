@@ -3,12 +3,16 @@
 Starts a real uvicorn server with the full FastAPI + LangGraph stack.
 The LLM is replaced with a FakeListChatModel unless OPENAI_API_KEY is set.
 K8s client is mocked (no kind cluster required).
+
+Env vars are set at module scope so that src modules imported during test
+collection create Settings/clients with the right values. The top-level
+conftest's _reset_singletons fixture restores pristine env vars for non-e2e
+tests to prevent pollution.
 """
 
 import asyncio
 import os
 import socket
-import sys
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -18,9 +22,27 @@ import pytest_asyncio
 import uvicorn
 
 # ---------------------------------------------------------------------------
-# Ensure CLUSTER_GUARDIAN_E2E is set so the top-level conftest.py skips stubs
+# Set env vars at module scope so src modules pick them up during import.
+# The top-level conftest._reset_singletons restores pristine env for non-e2e
+# tests, so these don't leak.
 # ---------------------------------------------------------------------------
-os.environ["CLUSTER_GUARDIAN_E2E"] = "1"
+os.environ.setdefault(
+    "CLUSTER_GUARDIAN_LLM_API_KEY",
+    os.environ.get("OPENAI_API_KEY", "test-key-e2e"),
+)
+os.environ.setdefault("CLUSTER_GUARDIAN_LLM_PROVIDER", "openai")
+os.environ.setdefault("CLUSTER_GUARDIAN_LLM_MODEL", "gpt-4o")
+os.environ.setdefault("CLUSTER_GUARDIAN_K8SGPT_ENABLED", "false")
+os.environ.setdefault("CLUSTER_GUARDIAN_EVENT_WATCH_ENABLED", "false")
+os.environ.setdefault("CLUSTER_GUARDIAN_DEV_CONTROLLER_ENABLED", "false")
+os.environ.setdefault("CLUSTER_GUARDIAN_SERVICE_DISCOVERY_ENABLED", "false")
+os.environ.setdefault("CLUSTER_GUARDIAN_FAST_LOOP_INTERVAL_SECONDS", "3600")
+os.environ.setdefault("CLUSTER_GUARDIAN_PROMETHEUS_URL", "http://localhost:9090")
+os.environ.setdefault("CLUSTER_GUARDIAN_LOKI_URL", "http://localhost:3100")
+os.environ.setdefault("CLUSTER_GUARDIAN_LONGHORN_URL", "http://localhost:8080")
+os.environ.setdefault("CLUSTER_GUARDIAN_GATUS_URL", "http://localhost:8081")
+os.environ.setdefault("CLUSTER_GUARDIAN_CROWDSEC_LAPI_URL", "http://localhost:8082")
+os.environ.setdefault("CLUSTER_GUARDIAN_DEV_CONTROLLER_URL", "http://localhost:8083")
 
 
 def pytest_collection_modifyitems(items):
@@ -47,77 +69,6 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-# ---------------------------------------------------------------------------
-# K8s mock helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_k8s_modules():
-    """Stub kubernetes modules with MagicMock so imports succeed."""
-    k8s_modules = [
-        "kubernetes",
-        "kubernetes.client",
-        "kubernetes.client.rest",
-        "kubernetes.config",
-        "kubernetes.watch",
-    ]
-    for mod in k8s_modules:
-        if mod not in sys.modules or isinstance(sys.modules[mod], MagicMock):
-            sys.modules[mod] = MagicMock()
-
-    # grpc / protobuf stubs
-    grpc_modules = [
-        "grpc",
-        "grpc.aio",
-        "grpc._channel",
-        "google.protobuf.runtime_version",
-    ]
-    for mod in grpc_modules:
-        if mod not in sys.modules or isinstance(sys.modules[mod], MagicMock):
-            sys.modules[mod] = MagicMock()
-
-    # qdrant stubs
-    qdrant_modules = [
-        "qdrant_client",
-        "qdrant_client.http",
-        "qdrant_client.http.models",
-    ]
-    for mod in qdrant_modules:
-        if mod not in sys.modules or isinstance(sys.modules[mod], MagicMock):
-            sys.modules[mod] = MagicMock()
-
-    # langfuse stubs
-    langfuse_modules = [
-        "langfuse",
-        "langfuse.callback",
-        "langfuse.batch_evaluation",
-        "langfuse.api",
-        "langfuse.api.resources",
-    ]
-    for mod in langfuse_modules:
-        if mod not in sys.modules or isinstance(sys.modules[mod], MagicMock):
-            sys.modules[mod] = MagicMock()
-
-    # Proto stubs
-    proto_mock = MagicMock()
-    sys.modules.setdefault("src.proto", proto_mock)
-    sys.modules.setdefault("src.proto.k8sgpt_pb2", proto_mock)
-    sys.modules.setdefault("src.proto.k8sgpt_pb2_grpc", proto_mock)
-
-    # qdrant realistic stubs
-    _qdrant_mock = sys.modules["qdrant_client"]
-    _qdrant_http_models = sys.modules["qdrant_client.http.models"]
-    _qdrant_http_models.Distance = MagicMock()
-    _qdrant_http_models.Distance.COSINE = "Cosine"
-    _qdrant_http_models.PointStruct = MagicMock()
-    _qdrant_http_models.VectorParams = MagicMock()
-    _qdrant_mock.AsyncQdrantClient = MagicMock()
-
-
-# Apply K8s mocks before any src imports
-_mock_k8s_modules()
 
 
 # ---------------------------------------------------------------------------
@@ -151,33 +102,15 @@ async def guardian_server():
     Patches K8s client, Redis, Qdrant to no-op so the server starts
     without real cluster access.  The LLM is replaced with a
     FakeListChatModel unless OPENAI_API_KEY is set.
+
+    All env var changes are saved and restored on teardown to avoid
+    polluting unit tests when running the full suite together.
     """
     port = _free_port()
 
-    # Set env vars for the server
-    os.environ["CLUSTER_GUARDIAN_LLM_API_KEY"] = os.environ.get(
-        "OPENAI_API_KEY", "test-key-e2e"
-    )
-    os.environ["CLUSTER_GUARDIAN_LLM_PROVIDER"] = "openai"
-    os.environ["CLUSTER_GUARDIAN_LLM_MODEL"] = "gpt-4o"
+    # HOST and PORT are server-specific, set them here (not at module scope)
     os.environ["CLUSTER_GUARDIAN_HOST"] = "127.0.0.1"
     os.environ["CLUSTER_GUARDIAN_PORT"] = str(port)
-    os.environ["CLUSTER_GUARDIAN_K8SGPT_ENABLED"] = "false"
-    os.environ["CLUSTER_GUARDIAN_EVENT_WATCH_ENABLED"] = "false"
-    os.environ["CLUSTER_GUARDIAN_DEV_CONTROLLER_ENABLED"] = "false"
-    os.environ["CLUSTER_GUARDIAN_SERVICE_DISCOVERY_ENABLED"] = "false"
-    os.environ["CLUSTER_GUARDIAN_FAST_LOOP_INTERVAL_SECONDS"] = "3600"
-
-    # Provide dummy URLs for optional services so constructors don't crash on
-    # .rstrip("/") with None values.
-    os.environ.setdefault("CLUSTER_GUARDIAN_PROMETHEUS_URL", "http://localhost:9090")
-    os.environ.setdefault("CLUSTER_GUARDIAN_LOKI_URL", "http://localhost:3100")
-    os.environ.setdefault("CLUSTER_GUARDIAN_LONGHORN_URL", "http://localhost:8080")
-    os.environ.setdefault("CLUSTER_GUARDIAN_GATUS_URL", "http://localhost:8081")
-    os.environ.setdefault("CLUSTER_GUARDIAN_CROWDSEC_LAPI_URL", "http://localhost:8082")
-    os.environ.setdefault(
-        "CLUSTER_GUARDIAN_DEV_CONTROLLER_URL", "http://localhost:8083"
-    )
 
     # Import modules first so patch targets exist
     import src.k8s_client
@@ -189,7 +122,6 @@ async def guardian_server():
     patches = [
         patch("src.k8s_client.config"),
         patch("src.k8s_client.client"),
-        patch("src.continuous_monitor.settings"),
     ]
 
     # Patch create_llm to return a fake model (unless using real LLM)
@@ -272,6 +204,11 @@ async def guardian_server():
 
     for p in patches:
         p.stop()
+
+    # Clean up fixture-specific env vars (module-scope vars are handled by
+    # _reset_singletons in the top-level conftest)
+    os.environ.pop("CLUSTER_GUARDIAN_HOST", None)
+    os.environ.pop("CLUSTER_GUARDIAN_PORT", None)
 
 
 # ---------------------------------------------------------------------------

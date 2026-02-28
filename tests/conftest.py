@@ -10,57 +10,56 @@ import pytest_asyncio
 
 # ---------------------------------------------------------------------------
 # Stub third-party modules broken on Python 3.14 BEFORE any src imports.
-# E2E tests set CLUSTER_GUARDIAN_E2E=1 and handle their own stubs/mocks.
+# Uses setdefault() so real modules are never overwritten if already loaded.
 # ---------------------------------------------------------------------------
-if os.environ.get("CLUSTER_GUARDIAN_E2E") != "1":
-    _STUB_MODULES = [
-        # langfuse: pydantic v1 broken on 3.14
-        "langfuse",
-        "langfuse.callback",
-        "langfuse.batch_evaluation",
-        "langfuse.api",
-        "langfuse.api.resources",
-        # grpc / protobuf: version mismatch
-        "grpc",
-        "grpc.aio",
-        "grpc._channel",
-        "google.protobuf.runtime_version",
-        # kubernetes: depends on 'six' (removed) and 'dateutil' (missing on 3.14)
-        "six",
-        "six.moves",
-        "six.moves.http_client",
-        "six.moves.urllib",
-        "six.moves.urllib.parse",
-        "dateutil",
-        "dateutil.parser",
-        "kubernetes",
-        "kubernetes.client",
-        "kubernetes.client.rest",
-        "kubernetes.config",
-        "kubernetes.watch",
-        # qdrant_client: metaclass conflict on 3.14
-        "qdrant_client",
-        "qdrant_client.http",
-        "qdrant_client.http.models",
-    ]
+_STUB_MODULES = [
+    # langfuse: pydantic v1 broken on 3.14
+    "langfuse",
+    "langfuse.callback",
+    "langfuse.batch_evaluation",
+    "langfuse.api",
+    "langfuse.api.resources",
+    # grpc / protobuf: version mismatch
+    "grpc",
+    "grpc.aio",
+    "grpc._channel",
+    "google.protobuf.runtime_version",
+    # kubernetes: depends on 'six' (removed) and 'dateutil' (missing on 3.14)
+    "six",
+    "six.moves",
+    "six.moves.http_client",
+    "six.moves.urllib",
+    "six.moves.urllib.parse",
+    "dateutil",
+    "dateutil.parser",
+    "kubernetes",
+    "kubernetes.client",
+    "kubernetes.client.rest",
+    "kubernetes.config",
+    "kubernetes.watch",
+    # qdrant_client: metaclass conflict on 3.14
+    "qdrant_client",
+    "qdrant_client.http",
+    "qdrant_client.http.models",
+]
 
-    for _mod in _STUB_MODULES:
-        sys.modules.setdefault(_mod, MagicMock())
+for _mod in _STUB_MODULES:
+    sys.modules.setdefault(_mod, MagicMock())
 
-    # Also stub the proto modules that fail on protobuf version mismatch
-    _proto_mock = MagicMock()
-    sys.modules.setdefault("src.proto", _proto_mock)
-    sys.modules.setdefault("src.proto.k8sgpt_pb2", _proto_mock)
-    sys.modules.setdefault("src.proto.k8sgpt_pb2_grpc", _proto_mock)
+# Also stub the proto modules that fail on protobuf version mismatch
+_proto_mock = MagicMock()
+sys.modules.setdefault("src.proto", _proto_mock)
+sys.modules.setdefault("src.proto.k8sgpt_pb2", _proto_mock)
+sys.modules.setdefault("src.proto.k8sgpt_pb2_grpc", _proto_mock)
 
-    # Provide realistic qdrant_client stubs so VectorMemory can be imported
-    _qdrant_mock = sys.modules["qdrant_client"]
-    _qdrant_http_models = sys.modules["qdrant_client.http.models"]
-    _qdrant_http_models.Distance = MagicMock()
-    _qdrant_http_models.Distance.COSINE = "Cosine"
-    _qdrant_http_models.PointStruct = MagicMock()
-    _qdrant_http_models.VectorParams = MagicMock()
-    _qdrant_mock.AsyncQdrantClient = MagicMock()
+# Provide realistic qdrant_client stubs so VectorMemory can be imported
+_qdrant_mock = sys.modules["qdrant_client"]
+_qdrant_http_models = sys.modules["qdrant_client.http.models"]
+_qdrant_http_models.Distance = MagicMock()
+_qdrant_http_models.Distance.COSINE = "Cosine"
+_qdrant_http_models.PointStruct = MagicMock()
+_qdrant_http_models.VectorParams = MagicMock()
+_qdrant_mock.AsyncQdrantClient = MagicMock()
 
 
 # ---------------------------------------------------------------------------
@@ -80,13 +79,24 @@ def settings_env(monkeypatch):
 # Singleton reset fixtures
 # ---------------------------------------------------------------------------
 
+# Snapshot CLUSTER_GUARDIAN_* env vars at import time (before any fixtures run).
+# This captures the pristine state before session-scoped e2e fixtures pollute.
+_PRISTINE_ENV: dict[str, str] = {
+    k: v for k, v in os.environ.items() if k.startswith("CLUSTER_GUARDIAN_")
+}
+
 
 @pytest.fixture(autouse=True)
-def _reset_singletons():
+def _reset_singletons(request):
     """Reset all module-level singletons between tests.
+
+    For non-e2e tests, also restores CLUSTER_GUARDIAN_* env vars to their
+    pristine pre-session state so session-scoped e2e fixtures don't leak.
 
     Uses getattr to gracefully handle modules that failed to import.
     """
+    _is_e2e = any(m.name == "e2e" for m in request.node.iter_markers())
+
     modules_and_attrs = [
         ("src.k8s_client", "_k8s_client"),
         ("src.redis_client", "_redis_client"),
@@ -121,6 +131,16 @@ def _reset_singletons():
                 setattr(mod, attr, None)
         except Exception:
             pass
+
+    # Restore env vars to pristine pre-session state for non-e2e tests.
+    # E2e tests need env vars from the session-scoped guardian_server fixture.
+    if not _is_e2e:
+        prefix = "CLUSTER_GUARDIAN_"
+        current_keys = {k for k in os.environ if k.startswith(prefix)}
+        for key in current_keys - set(_PRISTINE_ENV):
+            del os.environ[key]
+        for key, value in _PRISTINE_ENV.items():
+            os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------
