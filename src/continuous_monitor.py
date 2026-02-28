@@ -7,8 +7,10 @@ batched, and dispatched to the LLM agent for investigation.
 """
 
 import asyncio
+import hashlib
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine, Optional
 
 import structlog
@@ -30,6 +32,12 @@ class AnomalySignal:
     namespace: str
     resource: str
     dedupe_key: str
+
+
+def _investigation_id(group_key: str) -> str:
+    """Generate a unique investigation ID from a group key and current time."""
+    h = hashlib.sha256(f"{group_key}-{time.time()}".encode()).hexdigest()[:12]
+    return f"inv-{h}"
 
 
 class ContinuousMonitor:
@@ -333,26 +341,34 @@ class ContinuousMonitor:
                 for condition in node.status.conditions or []:
                     # Ready=False is bad; pressure conditions True is bad
                     if condition.type == "Ready" and condition.status != "True":
-                        signals.append(AnomalySignal(
-                            source="node_condition",
-                            severity="critical",
-                            title=f"Node not ready: {name}",
-                            details=f"Ready={condition.status}: {condition.message or ''}",
-                            namespace="cluster",
-                            resource=name,
-                            dedupe_key=f"node:not_ready:{name}",
-                        ))
-                    elif condition.type in ("MemoryPressure", "DiskPressure", "PIDPressure"):
-                        if condition.status == "True":
-                            signals.append(AnomalySignal(
+                        signals.append(
+                            AnomalySignal(
                                 source="node_condition",
-                                severity="warning",
-                                title=f"Node {condition.type}: {name}",
-                                details=condition.message or "",
+                                severity="critical",
+                                title=f"Node not ready: {name}",
+                                details=f"Ready={condition.status}: {condition.message or ''}",
                                 namespace="cluster",
                                 resource=name,
-                                dedupe_key=f"node:{condition.type.lower()}:{name}",
-                            ))
+                                dedupe_key=f"node:not_ready:{name}",
+                            )
+                        )
+                    elif condition.type in (
+                        "MemoryPressure",
+                        "DiskPressure",
+                        "PIDPressure",
+                    ):
+                        if condition.status == "True":
+                            signals.append(
+                                AnomalySignal(
+                                    source="node_condition",
+                                    severity="warning",
+                                    title=f"Node {condition.type}: {name}",
+                                    details=condition.message or "",
+                                    namespace="cluster",
+                                    resource=name,
+                                    dedupe_key=f"node:{condition.type.lower()}:{name}",
+                                )
+                            )
         except Exception as exc:
             logger.debug("node condition check failed", error=str(exc))
         return signals
@@ -361,7 +377,9 @@ class ContinuousMonitor:
         """Detect deployments where available < desired or Progressing=False."""
         signals = []
         try:
-            deployments = await asyncio.to_thread(self._k8s.apps_v1.list_deployment_for_all_namespaces)
+            deployments = await asyncio.to_thread(
+                self._k8s.apps_v1.list_deployment_for_all_namespaces
+            )
             for dep in deployments.items:
                 ns = dep.metadata.namespace
                 if ns in settings.protected_namespaces:
@@ -370,28 +388,32 @@ class ContinuousMonitor:
                 spec_replicas = dep.spec.replicas or 1
                 available = dep.status.available_replicas or 0
                 if available < spec_replicas:
-                    signals.append(AnomalySignal(
-                        source="deployment_rollout",
-                        severity="warning",
-                        title=f"Deployment degraded: {ns}/{name}",
-                        details=f"available={available} desired={spec_replicas}",
-                        namespace=ns,
-                        resource=name,
-                        dedupe_key=f"deployment:{ns}/{name}",
-                    ))
+                    signals.append(
+                        AnomalySignal(
+                            source="deployment_rollout",
+                            severity="warning",
+                            title=f"Deployment degraded: {ns}/{name}",
+                            details=f"available={available} desired={spec_replicas}",
+                            namespace=ns,
+                            resource=name,
+                            dedupe_key=f"deployment:{ns}/{name}",
+                        )
+                    )
 
                 # Check Progressing condition
                 for condition in dep.status.conditions or []:
                     if condition.type == "Progressing" and condition.status == "False":
-                        signals.append(AnomalySignal(
-                            source="deployment_rollout",
-                            severity="critical",
-                            title=f"Deployment rollout stalled: {ns}/{name}",
-                            details=condition.message or "Progressing=False",
-                            namespace=ns,
-                            resource=name,
-                            dedupe_key=f"deployment_stalled:{ns}/{name}",
-                        ))
+                        signals.append(
+                            AnomalySignal(
+                                source="deployment_rollout",
+                                severity="critical",
+                                title=f"Deployment rollout stalled: {ns}/{name}",
+                                details=condition.message or "Progressing=False",
+                                namespace=ns,
+                                resource=name,
+                                dedupe_key=f"deployment_stalled:{ns}/{name}",
+                            )
+                        )
         except Exception as exc:
             logger.debug("deployment rollout check failed", error=str(exc))
         return signals
@@ -447,19 +469,19 @@ class ContinuousMonitor:
 
             involved = ""
             if obj.involved_object:
-                involved = (
-                    f"{obj.involved_object.kind}/{obj.involved_object.name}"
-                )
+                involved = f"{obj.involved_object.kind}/{obj.involved_object.name}"
 
-            signals.append(AnomalySignal(
-                source="k8s_events",
-                severity="warning" if obj.type == "Warning" else "critical",
-                title=f"K8s event: {obj.reason}",
-                details=obj.message or "",
-                namespace=ns,
-                resource=involved,
-                dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
-            ))
+            signals.append(
+                AnomalySignal(
+                    source="k8s_events",
+                    severity="warning" if obj.type == "Warning" else "critical",
+                    title=f"K8s event: {obj.reason}",
+                    details=obj.message or "",
+                    namespace=ns,
+                    resource=involved,
+                    dedupe_key=f"k8s_event:{ns}/{involved}/{obj.reason}",
+                )
+            )
 
         return signals
 
@@ -562,23 +584,33 @@ class ContinuousMonitor:
 
             description = "\n".join(lines)
 
+            # Generate investigation ID
+            investigation_id = _investigation_id(group_key)
+
             # Broadcast to WebSocket clients
             if self._broadcast_callback:
                 try:
                     await self._broadcast_callback(
                         {
                             "type": "anomaly_detected",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "investigation_id": investigation_id,
                             "data": {
                                 "group": group_key,
                                 "severity": highest_severity,
-                                "escalation": escalation_level.value if escalation_level else None,
+                                "escalation": escalation_level.value
+                                if escalation_level
+                                else None,
+                                "description": description,
                                 "signals": [
                                     {
                                         "source": s.source,
                                         "severity": s.severity,
                                         "title": s.title,
+                                        "details": s.details,
                                         "namespace": s.namespace,
                                         "resource": s.resource,
+                                        "dedupe_key": s.dedupe_key,
                                     }
                                     for s in signals
                                 ],
@@ -592,9 +624,7 @@ class ContinuousMonitor:
             if escalation_level and escalation_level.value == "long_term":
                 if self._self_tuner and self._self_tuner._dev_controller:
                     try:
-                        await self._self_tuner.auto_escalate(
-                            group_key, description
-                        )
+                        await self._self_tuner.auto_escalate(group_key, description)
                         logger.info(
                             "Auto-escalated long-term issue",
                             group=group_key,
@@ -613,6 +643,7 @@ class ContinuousMonitor:
                         self._investigate_callback(
                             description=description,
                             thread_id=f"cm-{group_key.replace('/', '-')}",
+                            investigation_id=investigation_id,
                         )
                     )
                 except Exception as exc:

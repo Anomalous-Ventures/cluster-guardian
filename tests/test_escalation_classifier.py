@@ -112,8 +112,11 @@ class TestGetStats:
 
     def test_stats_after_classify(self, classifier):
         classifier.classify(
-            source="test", severity="warning",
-            title="t", details="d", dedupe_key="key1",
+            source="test",
+            severity="warning",
+            title="t",
+            details="d",
+            dedupe_key="key1",
         )
         stats = classifier.get_stats()
         assert stats["tracked_keys"] == 1

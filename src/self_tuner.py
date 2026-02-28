@@ -163,13 +163,17 @@ class SelfTuner:
         # Find recurring patterns that haven't been escalated
         for pattern_key, count in self._issue_counts.items():
             if count >= self._escalation_threshold:
-                suggestions.append({
-                    "type": "new_playbook",
-                    "description": f"Create playbook for recurring issue: {pattern_key} ({count} occurrences)",
-                    "pattern_key": pattern_key,
-                    "occurrences": count,
-                    "priority": "high" if count >= self._escalation_threshold * 2 else "medium",
-                })
+                suggestions.append(
+                    {
+                        "type": "new_playbook",
+                        "description": f"Create playbook for recurring issue: {pattern_key} ({count} occurrences)",
+                        "pattern_key": pattern_key,
+                        "occurrences": count,
+                        "priority": "high"
+                        if count >= self._escalation_threshold * 2
+                        else "medium",
+                    }
+                )
 
         # Check for patterns that suggest missing health checks
         namespaces_with_issues = set()
@@ -183,31 +187,35 @@ class SelfTuner:
                 c for k, c in self._issue_counts.items() if k.startswith(f"{ns}/")
             )
             if ns_total >= 5:
-                suggestions.append({
-                    "type": "enhanced_monitoring",
-                    "description": f"Namespace '{ns}' has {ns_total} total issues - consider adding dedicated health checks",
-                    "namespace": ns,
-                    "total_issues": ns_total,
-                    "priority": "medium",
-                })
+                suggestions.append(
+                    {
+                        "type": "enhanced_monitoring",
+                        "description": f"Namespace '{ns}' has {ns_total} total issues - consider adding dedicated health checks",
+                        "namespace": ns,
+                        "total_issues": ns_total,
+                        "priority": "medium",
+                    }
+                )
 
         # Detect high false positive rates
         for pattern_key, stats in self._effectiveness.items():
             total = stats.get("true_positive", 0) + stats.get("false_positive", 0)
             if total >= 5 and stats.get("false_positive", 0) / total > 0.5:
-                suggestions.append({
-                    "type": "tune_threshold",
-                    "description": f"Check '{pattern_key}' has >50% false positive rate - tune sensitivity",
-                    "pattern_key": pattern_key,
-                    "false_positive_rate": round(stats["false_positive"] / total, 2),
-                    "priority": "high",
-                })
+                suggestions.append(
+                    {
+                        "type": "tune_threshold",
+                        "description": f"Check '{pattern_key}' has >50% false positive rate - tune sensitivity",
+                        "pattern_key": pattern_key,
+                        "false_positive_rate": round(
+                            stats["false_positive"] / total, 2
+                        ),
+                        "priority": "high",
+                    }
+                )
 
         return suggestions
 
-    def track_check_effectiveness(
-        self, check_key: str, true_positive: bool
-    ):
+    def track_check_effectiveness(self, check_key: str, true_positive: bool):
         """Track whether a check result was a true or false positive.
 
         Args:

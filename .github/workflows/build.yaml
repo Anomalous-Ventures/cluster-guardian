@@ -44,7 +44,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            REGISTRY_PREFIX=${{ secrets.HARBOR_REGISTRY }}/dockerhub-proxy/
+            REGISTRY_PREFIX=docker.io/
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64

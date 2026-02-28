@@ -30,12 +30,12 @@ class VectorMemory:
     def __init__(
         self,
         qdrant_url: str,
-        litellm_url: str,
-        litellm_api_key: str,
+        embedding_url: str,
+        embedding_api_key: str,
     ) -> None:
         self.qdrant_url = qdrant_url
-        self.litellm_url = litellm_url.rstrip("/")
-        self.litellm_api_key = litellm_api_key
+        self.embedding_url = embedding_url.rstrip("/") if embedding_url else ""
+        self.embedding_api_key = embedding_api_key or ""
         self.collection = settings.qdrant_collection
         self.available = False
         self._client: AsyncQdrantClient | None = None
@@ -68,12 +68,12 @@ class VectorMemory:
             )
 
     async def _get_embedding(self, text: str) -> list[float]:
-        """Fetch an embedding vector from LiteLLM's OpenAI-compatible endpoint."""
+        """Fetch an embedding vector from an OpenAI-compatible endpoint."""
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f"{self.litellm_url}/v1/embeddings",
+                f"{self.embedding_url}/v1/embeddings",
                 headers={
-                    "Authorization": f"Bearer {self.litellm_api_key}",
+                    "Authorization": f"Bearer {self.embedding_api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
@@ -172,7 +172,7 @@ def get_memory() -> VectorMemory:
     if _memory is None:
         _memory = VectorMemory(
             qdrant_url=settings.qdrant_url,
-            litellm_url=settings.llm_base_url,
-            litellm_api_key=settings.llm_api_key,
+            embedding_url=settings.embedding_base_url or settings.llm_base_url,
+            embedding_api_key=settings.embedding_api_key or settings.llm_api_key,
         )
     return _memory

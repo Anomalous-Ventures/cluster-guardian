@@ -159,6 +159,7 @@ class AppState:
         self.websocket_connections: List[WebSocket] = []
         self.pending_approvals: List[Dict[str, Any]] = []
         self._init_task: Optional[asyncio.Task] = None
+        self._discovery = None
 
 
 app_state = AppState()
@@ -209,7 +210,9 @@ async def _deferred_init():
                 app_state.pending_approvals = persisted
                 logger.info("Loaded pending approvals from Redis", count=len(persisted))
         except Exception as exc:
-            logger.warning("Failed to load pending approvals from Redis", error=str(exc))
+            logger.warning(
+                "Failed to load pending approvals from Redis", error=str(exc)
+            )
 
         # Load last scan result from Redis
         try:
@@ -223,7 +226,22 @@ async def _deferred_init():
         # Initialize guardian in a thread to avoid blocking the event loop
         # (LangGraph/tool binding is CPU-intensive sync work)
         app_state.guardian = await asyncio.to_thread(get_guardian)
+        app_state.guardian.set_broadcast_callback(broadcast_update)
         logger.info("Guardian initialized")
+
+        # Auto-discover cluster services
+        try:
+            from .cluster_discovery import ClusterDiscovery
+
+            discovery = ClusterDiscovery(k8s_client=app_state.guardian.k8s)
+            discovered = await discovery.discover()
+            app_state._discovery = discovery
+            # Apply discovered URLs to settings (only if not already configured)
+            for key, url in discovered.items():
+                if getattr(settings, key, None) is None:
+                    setattr(settings, key, url)
+        except Exception as exc:
+            logger.warning("Auto-discovery failed", error=str(exc))
 
         # Start periodic scan task
         app_state.scan_task = asyncio.create_task(periodic_scan_loop())
@@ -1162,6 +1180,17 @@ async def discovered_services() -> Dict[str, Any]:
         return {"services": sd.get_discovered(), "enabled": True}
     except Exception as exc:
         return {"services": [], "error": str(exc)}
+
+
+@discovery_router.get("/discovery")
+async def cluster_discovery_results() -> Dict[str, Any]:
+    """Return auto-discovered cluster services from startup scan."""
+    if app_state._discovery is None:
+        return {"discovered": {}, "status": "not_run"}
+    return {
+        "discovered": app_state._discovery.get_discovered(),
+        "status": "complete",
+    }
 
 
 # =============================================================================

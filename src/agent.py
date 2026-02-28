@@ -9,13 +9,14 @@ The agent can:
 - Learn from past issues and solutions
 """
 
-from typing import Dict, List, Any, Optional, TypedDict, Literal
+from typing import Dict, List, Any, Callable, Coroutine, Optional, TypedDict, Literal
 from datetime import datetime, timezone
+import hashlib
 import json
+import time
 import structlog
 import zoneinfo
 
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, END
@@ -28,6 +29,7 @@ except ImportError:
     LangfuseCallbackHandler = None
 
 from .config import settings
+from .llm_factory import create_llm
 from .k8s_client import get_k8s_client, K8sClient
 from .k8sgpt_client import get_k8sgpt_client, K8sGPTClient
 from .health_checks import get_health_checker, DeepHealthChecker
@@ -1204,11 +1206,11 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         self.self_tuner = get_self_tuner()
 
         # Create LLM
-        self.llm = ChatOpenAI(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            model=settings.llm_model,
-            temperature=0.1,  # Low temperature for reliability
+        self.llm = create_llm()
+
+        # Broadcast callback for investigation lifecycle events
+        self._broadcast_callback: Optional[Callable[..., Coroutine[Any, Any, Any]]] = (
+            None
         )
 
         # Langfuse observability
@@ -1247,6 +1249,12 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
 
         # Build graph
         self.graph = self._build_graph()
+
+    def set_broadcast_callback(
+        self, callback: Callable[..., Coroutine[Any, Any, Any]]
+    ) -> None:
+        """Set a callback for broadcasting investigation lifecycle events."""
+        self._broadcast_callback = callback
 
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow."""
@@ -1424,7 +1432,10 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
             }
 
     async def investigate_issue(
-        self, description: str, thread_id: str = "guardian-investigate"
+        self,
+        description: str,
+        thread_id: str = "guardian-investigate",
+        investigation_id: str | None = None,
     ) -> Dict[str, Any]:
         """
         Investigate a specific issue reported by a user or alert.
@@ -1432,8 +1443,19 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         Args:
             description: Description of the issue to investigate
             thread_id: Thread ID for conversation continuity
+            investigation_id: Unique ID for tracking this investigation's lifecycle
         """
-        logger.info("Investigating issue", description=description[:100])
+        if investigation_id is None:
+            h = hashlib.sha256(f"{description}-{time.time()}".encode()).hexdigest()[:12]
+            investigation_id = f"inv-{h}"
+
+        logger.info(
+            "Investigating issue",
+            description=description[:100],
+            investigation_id=investigation_id,
+        )
+
+        start_time = time.monotonic()
 
         quiet = _is_quiet_hours()
         if quiet:
@@ -1468,10 +1490,59 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
         if self.langfuse_handler:
             config["callbacks"] = [self.langfuse_handler]
 
+        # Broadcast investigation_started
+        await self._broadcast_event(
+            {
+                "type": "investigation_started",
+                "investigation_id": investigation_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "data": {"description": description[:500]},
+            }
+        )
+
         try:
             final_state = None
             async for state in self.graph.astream(initial_state, config):
                 final_state = state
+
+                # Broadcast investigation_step for each iteration
+                step_data: Dict[str, Any] = {
+                    "type": "investigation_step",
+                    "investigation_id": investigation_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {},
+                }
+                if "agent" in state:
+                    msgs = state["agent"].get("messages", [])
+                    for msg in msgs:
+                        if isinstance(msg, AIMessage):
+                            step_data["data"]["node"] = "agent"
+                            if msg.content:
+                                step_data["data"]["reasoning"] = msg.content[:2000]
+                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                step_data["data"]["tool_calls"] = [
+                                    {"name": tc["name"], "args": tc.get("args", {})}
+                                    for tc in msg.tool_calls
+                                ]
+                if "tools" in state:
+                    msgs = state["tools"].get("messages", [])
+                    tool_results = []
+                    for msg in msgs:
+                        if hasattr(msg, "name") and hasattr(msg, "content"):
+                            content = (
+                                msg.content
+                                if isinstance(msg.content, str)
+                                else str(msg.content)
+                            )
+                            tool_results.append(
+                                {"name": msg.name, "result": content[:500]}
+                            )
+                    if tool_results:
+                        step_data["data"]["node"] = "tools"
+                        step_data["data"]["tool_results"] = tool_results
+
+                if step_data["data"]:
+                    await self._broadcast_event(step_data)
 
             # Get summary
             messages = []
@@ -1496,21 +1567,66 @@ Start by analyzing the cluster state, checking service health, and reviewing Pro
                     },
                 )
 
+            duration = time.monotonic() - start_time
+
+            # Broadcast investigation_completed
+            await self._broadcast_event(
+                {
+                    "type": "investigation_completed",
+                    "investigation_id": investigation_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {
+                        "summary": summary[:2000],
+                        "actions_taken": [
+                            e.get("action", "unknown") for e in audit_log
+                        ],
+                        "duration_seconds": round(duration, 2),
+                        "status": "completed",
+                    },
+                }
+            )
+
             return {
                 "success": True,
                 "summary": summary,
+                "investigation_id": investigation_id,
                 "audit_log": audit_log,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:
+            duration = time.monotonic() - start_time
             logger.error("Investigation failed", error=str(e))
             notifier.send_wazuh_syslog("investigate", "failed", {"error": str(e)})
+
+            await self._broadcast_event(
+                {
+                    "type": "investigation_completed",
+                    "investigation_id": investigation_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": {
+                        "summary": str(e)[:2000],
+                        "actions_taken": [],
+                        "duration_seconds": round(duration, 2),
+                        "status": "failed",
+                    },
+                }
+            )
+
             return {
                 "success": False,
                 "error": str(e),
+                "investigation_id": investigation_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+
+    async def _broadcast_event(self, event: Dict[str, Any]) -> None:
+        """Broadcast an event via the callback, if set."""
+        if self._broadcast_callback:
+            try:
+                await self._broadcast_callback(event)
+            except Exception:
+                pass
 
 
 # Global instance
